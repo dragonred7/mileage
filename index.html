@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mileage">
+<meta name="theme-color" content="#0f1115">
+<title>Mileage Tracker</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root{
+  --bg:#0f1115; --card:#1a1d24; --card2:#232733; --line:#2e3340;
+  --text:#e8eaed; --muted:#9aa0aa; --accent:#22c55e; --accent2:#16a34a;
+  --red:#ef4444; --blue:#3b82f6; --orange:#f59e0b; --purple:#a855f7; --yellow:#eab308;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:16px}
+body{padding-top:env(safe-area-inset-top);padding-bottom:calc(70px + env(safe-area-inset-bottom))}
+header{padding:14px 16px 6px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:20px;margin:0}
+main{padding:0 16px 16px;max-width:640px;margin:0 auto}
+.card{background:var(--card);border-radius:14px;padding:14px;margin:10px 0}
+.muted{color:var(--muted)} .small{font-size:13px} .center{text-align:center}
+.big{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+.row{display:flex;gap:10px;align-items:center} .row>*{flex:1}
+.spread{display:flex;justify-content:space-between;align-items:center;gap:8px}
+button{font:inherit;border:0;border-radius:12px;padding:14px;background:var(--card2);color:var(--text);font-weight:600;cursor:pointer;width:100%}
+button:active{transform:scale(.98);opacity:.85}
+button:disabled{opacity:.5}
+.btn-go{background:var(--accent);color:#04210f;font-size:20px;padding:20px}
+.btn-stop{background:var(--red);color:#fff;font-size:18px;padding:18px}
+.btn-sm{padding:8px 12px;font-size:14px;width:auto}
+.btn-link{background:none;color:var(--accent);padding:8px;width:auto}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.stopbtn{padding:20px 6px;font-size:16px}
+.stopbtn.pickup{background:#1e3a8a} .stopbtn.dropoff{background:#92400e}
+.stopbtn.gas{background:#713f12} .stopbtn.break{background:#374151} .stopbtn.other{background:#3f3f46}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{font:inherit;font-size:16px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+textarea{min-height:90px}
+.map{height:240px;border-radius:12px;overflow:hidden;margin:10px 0;background:#222}
+.map.tall{height:320px}
+.list .item{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);gap:8px}
+.list .item:last-child{border-bottom:0}
+.stat{background:var(--card2);border-radius:10px;padding:10px}
+.stat .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat.hl{background:#14532d} .stat.hl .k{color:#bbf7d0}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:8px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:12px}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.money td{padding:7px 0} .money td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.money tr.total td{font-weight:700;border-top:2px solid var(--line)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:4px 0}
+.chip{white-space:nowrap;padding:8px 12px;border-radius:20px;background:var(--card2);font-size:14px;width:auto;font-weight:500}
+.chip.on{background:var(--accent);color:#04210f}
+nav{position:fixed;left:0;right:0;bottom:0;background:#14171d;border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:1000}
+nav button{background:none;border-radius:0;padding:10px 0 12px;font-size:12px;color:var(--muted);font-weight:500}
+nav button .ic{display:block;font-size:20px;margin-bottom:2px}
+nav button.on{color:var(--accent)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2000;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--card);width:100%;max-width:640px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px 16px calc(24px + env(safe-area-inset-bottom))}
+.sheet h2{margin:4px 0 8px;font-size:20px}
+#toast{position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translateX(-50%);background:#000;color:#fff;padding:10px 16px;border-radius:10px;z-index:3000;font-size:14px;display:none;max-width:90vw;text-align:center}
+.pin{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;color:#fff;font-size:12px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.exp-row{display:grid;grid-template-columns:1fr 100px 36px;gap:6px;margin-bottom:6px}
+.exp-row button{padding:0;background:var(--card2)}
+.leaflet-container{background:#ddd}
+</style>
+</head>
+<body>
+<header><h1 id="title">Mileage Tracker</h1><span id="hdr-right" class="small muted"></span></header>
+<main id="main"></main>
+<nav>
+  <button data-nav="drive" class="on"><span class="ic">🚗</span>Drive</button>
+  <button data-nav="history"><span class="ic">📋</span>History</button>
+  <button data-nav="summary"><span class="ic">📊</span>Summary</button>
+  <button data-nav="settings"><span class="ic">⚙️</span>Settings</button>
+</nav>
+<div id="toast"></div>
+<div id="modal-root"></div>
+
+<script>
+/* ============ Storage ============ */
+const LS = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ toast('⚠️ Could not save — storage full? Make a backup.'); return false; } }
+};
+const DEFAULTS = { mpg:25, gasPrice:3.50, taxPct:25, irsRate:0.76, homeLabel:'Home', purpose:'Delivery driving (Walmart Spark)' };
+let settings = Object.assign({}, DEFAULTS, LS.get('mt_settings', {}));
+let shifts = LS.get('mt_shifts', []);
+let active = LS.get('mt_active', null);
+const saveShifts = () => LS.set('mt_shifts', shifts);
+const saveActive = () => active ? LS.set('mt_active', active) : localStorage.removeItem('mt_active');
+const saveSettings = () => LS.set('mt_settings', settings);
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+
+/* ============ Helpers ============ */
+const $ = s => document.querySelector(s);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = v => { if (v === '' || v === null || v === undefined) return null; const n = parseFloat(String(v).replace(/[$,]/g,'')); return isNaN(n) ? null : n; };
+const money = v => (v < 0 ? '-$' : '$') + Math.abs(v || 0).toFixed(2);
+const mi = v => (v || 0).toFixed(1) + ' mi';
+const fmtTime = t => new Date(t).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+const fmtDate = t => new Date(t).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+const fmtDateShort = t => new Date(t).toLocaleDateString([], {month:'numeric', day:'numeric', year:'numeric'});
+function fmtDur(ms){ ms = Math.max(0, ms); const h = Math.floor(ms/3.6e6), m = Math.floor(ms%3.6e6/6e4); return h ? `${h}h ${m}m` : `${m}m`; }
+function fmtClock(ms){ ms = Math.max(0, ms); const h = Math.floor(ms/3.6e6), m = Math.floor(ms%3.6e6/6e4), s = Math.floor(ms%6e4/1000); return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+const toLocalInput = t => { const d = new Date(t); return new Date(d.getTime() - d.getTimezoneOffset()*6e4).toISOString().slice(0,16); };
+function haversine(a, b){ const R = 3958.8, r = x => x*Math.PI/180; const dLat = r(b.lat-a.lat), dLon = r(b.lon-a.lon); const h = Math.sin(dLat/2)**2 + Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+let toastTimer;
+function toast(msg, ms=2500){ const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(()=> t.style.display='none', ms); }
+
+function getPos(){
+  return new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      p => res({lat:p.coords.latitude, lon:p.coords.longitude, acc:Math.round(p.coords.accuracy)}),
+      () => res(null),
+      {enableHighAccuracy:true, timeout:15000, maximumAge:5000});
+  });
+}
+
+/* Keep screen awake during a shift (when the app is on screen) */
+let wakeLock = null;
+async function keepAwake(on){
+  try{
+    if (on && 'wakeLock' in navigator && !wakeLock){ wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', ()=> wakeLock = null); }
+    if (!on && wakeLock){ await wakeLock.release(); wakeLock = null; }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible'){ if (active) keepAwake(true); if (view === 'drive') render(); } });
+
+/* ============ Stop types ============ */
+const TYPES = {
+  start:{label:'Start', color:'#22c55e', ch:'S'},
+  end:{label:'End', color:'#ef4444', ch:'E'},
+  pickup:{label:'Pickup', color:'#3b82f6', ch:'P'},
+  dropoff:{label:'Drop-off', color:'#f59e0b', ch:'D'},
+  spark:{label:'Spark opened', color:'#a855f7', ch:'•'},
+  gas:{label:'Gas', color:'#eab308', ch:'G'},
+  break:{label:'Break', color:'#6b7280', ch:'B'},
+  other:{label:'Other', color:'#71717a', ch:'O'}
+};
+const STOP_TYPES = ['pickup','dropoff','spark','gas','break','other'];
+
+/* ============ Core calculations ============ */
+function points(s){
+  const pts = [];
+  if (s.start){ s.start.type = 'start'; pts.push(s.start); }
+  (s.stops || []).slice().sort((a,b) => a.t - b.t).forEach(x => pts.push(x));
+  if (s.end){ s.end.type = 'end'; pts.push(s.end); }
+  return pts;
+}
+function routeKey(s){ return points(s).filter(p => p.lat != null).map(p => p.lat.toFixed(5)+','+p.lon.toFixed(5)).join(';'); }
+function straightMiles(s){
+  const pts = points(s).filter(p => p.lat != null);
+  if (pts.length < 2) return null;
+  let d = 0; for (let i = 1; i < pts.length; i++) d += haversine(pts[i-1], pts[i]);
+  return d * 1.25; // roads are ~25% longer than straight lines
+}
+function calc(s){
+  const endT = (s.end && s.end.t) || Date.now();
+  const hours = Math.max(0, (endT - s.start.t) / 3.6e6);
+  const o1 = num(s.start.odo), o2 = num(s.end && s.end.odo);
+  const odoMiles = (o1 != null && o2 != null && o2 >= o1) ? o2 - o1 : null;
+  const routeOk = s.route && s.route.key === routeKey(s);
+  const gpsMiles = routeOk ? s.route.miles : straightMiles(s);
+  const override = num(s.milesOverride);
+  let miles, source;
+  if (override != null){ miles = override; source = 'Manual entry'; }
+  else if (odoMiles != null){ miles = odoMiles; source = 'Odometer'; }
+  else if (gpsMiles != null){ miles = gpsMiles; source = routeOk ? 'GPS road route (estimate)' : 'GPS straight-line (estimate)'; }
+  else { miles = 0; source = 'None'; }
+  const mpg = num(s.mpg) || settings.mpg, gasPrice = num(s.gasPrice) ?? settings.gasPrice, taxPct = num(s.taxPct) ?? settings.taxPct;
+  const pay = num(s.pay) || 0, tips = num(s.tips) || 0;
+  const expenses = (s.expenses || []).reduce((a, e) => a + (num(e.amt) || 0), 0);
+  const gross = pay + tips;
+  const gallons = mpg ? miles / mpg : 0;
+  const gas = gallons * gasPrice;
+  const net = gross - gas - expenses;
+  const tax = Math.max(0, net) * taxPct / 100;
+  const takeHome = net - tax;
+  const irsRate = num(s.irsRate) ?? settings.irsRate;
+  return { hours, miles, source, odoMiles, gpsMiles, pay, tips, gross, expenses, gallons, gas, net, tax, takeHome,
+    hourlyGross: hours > 0 ? gross / hours : 0,
+    hourlyTrue: hours > 0 ? takeHome / hours : 0,
+    perMile: miles > 0 ? gross / miles : 0,
+    irsDeduction: miles * irsRate, mpg, gasPrice, taxPct, irsRate };
+}
+
+/* ============ Routing (free OSRM service) ============ */
+const geomCache = {};
+async function fetchRoute(s){
+  const pts = points(s).filter(p => p.lat != null);
+  if (pts.length < 2) return null;
+  const key = routeKey(s);
+  if (s.route && s.route.key === key && geomCache[key]) return s.route;
+  const coords = [], legs = [];
+  for (let i = 0; i < pts.length - 1; i += 24){
+    const chunk = pts.slice(i, i + 25);
+    const url = 'https://router.project-osrm.org/route/v1/driving/' + chunk.map(p => p.lon.toFixed(6)+','+p.lat.toFixed(6)).join(';') + '?overview=full&geometries=geojson';
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('route ' + r.status);
+    const j = await r.json();
+    if (j.code !== 'Ok') throw new Error(j.code);
+    const rt = j.routes[0];
+    rt.geometry.coordinates.forEach(c => coords.push([c[1], c[0]]));
+    rt.legs.forEach(l => legs.push({m: l.distance, s: l.duration}));
+  }
+  geomCache[key] = coords;
+  s.route = { key, legs, miles: legs.reduce((a, l) => a + l.m, 0) / 1609.344 };
+  return s.route;
+}
+
+/* ============ Street addresses (free OpenStreetMap lookup) ============ */
+let geoBusy = false;
+async function geocodeShift(s){
+  if (geoBusy) return; geoBusy = true;
+  try{
+    for (const p of points(s)){
+      if (p.lat == null || p.addr || p.geoTried) continue;
+      p.geoTried = true;
+      try{
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${p.lat}&lon=${p.lon}`);
+        const j = await r.json(); const a = j.address || {};
+        const street = [a.house_number, a.road].filter(Boolean).join(' ');
+        const city = a.city || a.town || a.village || a.suburb || '';
+        p.addr = [j.name && j.name !== a.road ? j.name : '', street, city].filter(Boolean).join(', ') || j.display_name || '';
+      }catch(e){}
+      await new Promise(r => setTimeout(r, 1100)); // service allows 1 lookup per second
+    }
+  } finally { geoBusy = false; }
+}
+
+/* ============ Maps ============ */
+let maps = {};
+function pinIcon(type, n){
+  const T = TYPES[type] || TYPES.other;
+  return L.divIcon({className:'', html:`<div class="pin" style="background:${T.color}">${n ?? T.ch}</div>`, iconSize:[24,24], iconAnchor:[12,12]});
+}
+function drawMap(elId, s, opts = {}){
+  if (typeof L === 'undefined'){ const el = document.getElementById(elId); if (el) el.innerHTML = '<div class="center muted small" style="padding:100px 0">Map needs an internet connection</div>'; return; }
+  if (maps[elId]){ try{ maps[elId].remove(); }catch(e){} delete maps[elId]; }
+  const el = document.getElementById(elId); if (!el) return;
+  const m = L.map(el, {zoomControl:false, attributionControl:true});
+  maps[elId] = m;
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'}).addTo(m);
+  const pts = points(s).filter(p => p.lat != null);
+  if (!pts.length){ m.setView([39.5, -98.35], 3); return; }
+  const latlngs = pts.map(p => [p.lat, p.lon]);
+  let stopN = 0;
+  pts.forEach(p => {
+    const label = (p.type === 'start' || p.type === 'end') ? null : ++stopN;
+    L.marker([p.lat, p.lon], {icon: pinIcon(p.type, p.type === 'spark' ? label : label)})
+      .addTo(m).bindPopup(`<b>${esc(TYPES[p.type]?.label || p.type)}</b> ${fmtTime(p.t)}${p.addr ? '<br>' + esc(p.addr) : ''}${p.note ? '<br>' + esc(p.note) : ''}`);
+  });
+  const key = routeKey(s);
+  if (geomCache[key]) L.polyline(geomCache[key], {color:'#22c55e', weight:5, opacity:.85}).addTo(m);
+  else L.polyline(latlngs, {color:'#22c55e', weight:3, dashArray:'6 8', opacity:.8}).addTo(m);
+  if (latlngs.length === 1) m.setView(latlngs[0], 14); else m.fitBounds(latlngs, {padding:[30,30]});
+  if (opts.route && !geomCache[key] && pts.length > 1){
+    fetchRoute(s).then(() => { if (opts.onRoute) opts.onRoute(); }).catch(() => {});
+  }
+}
+
+/* ============ Views ============ */
+let view = 'drive', detailId = null, period = 'week', timerInt = null;
+function go(v, id){ view = v; detailId = id ?? null; render(); window.scrollTo(0,0); }
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.nav));
+
+function render(){
+  clearInterval(timerInt);
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.nav === (view === 'detail' ? 'history' : view)));
+  $('#hdr-right').textContent = active ? '● Shift active' : '';
+  $('#hdr-right').style.color = active ? 'var(--accent)' : '';
+  ({drive:renderDrive, history:renderHistory, detail:renderDetail, summary:renderSummary, settings:renderSettings})[view]();
+}
+
+/* ---------- Drive ---------- */
+function renderDrive(){
+  $('#title').textContent = 'Drive';
+  if (!active){
+    const last = shifts.slice().sort((a,b) => b.start.t - a.start.t)[0];
+    const lastOdo = last && num(last.end && last.end.odo);
+    $('#main').innerHTML = `
+      <div class="card">
+        <label>Starting odometer</label>
+        <input id="odo-start" inputmode="decimal" placeholder="${lastOdo != null ? 'Last shift ended at ' + lastOdo : 'e.g. 48213.4'}">
+        <label>Starting from</label>
+        <input id="start-label" value="${esc(settings.homeLabel)}">
+        <div style="height:14px"></div>
+        <button class="btn-go" id="btn-start">▶ Start Shift</button>
+        <p class="small muted center">Saves the time and your GPS location. Keep this app's tab open if you can — but it's fine to switch to Spark and Maps.</p>
+      </div>
+      <button id="btn-manual">+ Add a past shift manually</button>`;
+    $('#btn-start').onclick = startShift;
+    $('#btn-manual').onclick = () => openShiftForm(null, 'manual');
+    return;
+  }
+  const c = calc(active);
+  const stops = (active.stops || []).slice().sort((a,b) => b.t - a.t);
+  $('#main').innerHTML = `
+    <div class="card center">
+      <div class="small muted">Started ${fmtTime(active.start.t)} from ${esc(active.start.label || 'start')}</div>
+      <div class="big" id="timer">${fmtClock(Date.now() - active.start.t)}</div>
+      <div class="small muted">${stops.length} stop${stops.length === 1 ? '' : 's'} logged · ~${mi(c.gpsMiles)} so far (GPS est.)</div>
+    </div>
+    <div class="grid2">
+      <button class="stopbtn pickup" data-stop="pickup">🛒 Pickup</button>
+      <button class="stopbtn dropoff" data-stop="dropoff">📦 Drop-off</button>
+    </div>
+    <div class="grid3" style="margin-top:10px">
+      <button class="stopbtn gas" data-stop="gas">⛽ Gas</button>
+      <button class="stopbtn break" data-stop="break">☕ Break</button>
+      <button class="stopbtn other" data-stop="other">📍 Other</button>
+    </div>
+    <div id="map-live" class="map"></div>
+    <div class="card">
+      <div class="spread"><b>Stops</b><button class="btn-link" id="btn-import">⬇ Import Spark log</button></div>
+      <div class="list">${stops.length ? stops.map(stopRow).join('') : '<p class="muted small">Tap a button above when you arrive at a pickup or drop-off.</p>'}</div>
+    </div>
+    <button class="btn-stop" id="btn-end">■ End Shift</button>
+    <div style="height:10px"></div>
+    <button id="btn-cancel" class="btn-sm" style="width:100%;background:none;color:var(--muted)">Discard this shift</button>`;
+  timerInt = setInterval(() => { const t = $('#timer'); if (t) t.textContent = fmtClock(Date.now() - active.start.t); }, 1000);
+  document.querySelectorAll('[data-stop]').forEach(b => b.onclick = () => addStop(b.dataset.stop, b));
+  bindStopRows(active, true);
+  $('#btn-import').onclick = () => openImport(active);
+  $('#btn-end').onclick = () => openShiftForm(active, 'end');
+  $('#btn-cancel').onclick = () => { if (confirm('Discard this shift? Nothing will be saved.')){ active = null; saveActive(); keepAwake(false); render(); } };
+  drawMap('map-live', active);
+  keepAwake(true);
+}
+function stopRow(p){
+  const T = TYPES[p.type] || TYPES.other;
+  return `<div class="item">
+    <div style="flex:1;min-width:0">
+      <div><span class="dot" style="background:${T.color}"></span><b>${fmtTime(p.t)}</b>
+        <select data-type="${p.id}" style="width:auto;padding:4px 6px;font-size:14px;margin-left:4px">${STOP_TYPES.map(k => `<option value="${k}" ${k === p.type ? 'selected' : ''}>${TYPES[k].label}</option>`).join('')}</select></div>
+      <div class="small muted">${p.lat == null ? '⚠️ no GPS fix' : esc(p.addr || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4)))}${p.note ? ' · ' + esc(p.note) : ''}</div>
+    </div>
+    <button class="btn-sm" data-del="${p.id}" aria-label="Delete stop">✕</button></div>`;
+}
+function bindStopRows(s, isActive){
+  const persist = () => { if (isActive) saveActive(); else saveShifts(); };
+  document.querySelectorAll('[data-type]').forEach(sel => sel.onchange = () => {
+    const p = s.stops.find(x => x.id === sel.dataset.type); if (p){ p.type = sel.value; persist(); render(); }
+  });
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    if (!confirm('Delete this stop?')) return;
+    s.stops = s.stops.filter(x => x.id !== b.dataset.del); persist(); render();
+  });
+}
+
+async function startShift(){
+  const btn = $('#btn-start'); btn.disabled = true; btn.textContent = 'Getting location…';
+  const odo = num($('#odo-start').value);
+  if (odo == null && !confirm('No starting odometer entered. For IRS records, odometer readings are best. Start anyway?')){ btn.disabled = false; btn.textContent = '▶ Start Shift'; return; }
+  const label = $('#start-label').value.trim();
+  const pos = await getPos();
+  active = { id: uid(), start: { t: Date.now(), odo, label, ...(pos || {}) }, stops: [], expenses: [],
+    mpg: settings.mpg, gasPrice: settings.gasPrice, taxPct: settings.taxPct, irsRate: settings.irsRate };
+  saveActive();
+  toast(pos ? '✅ Shift started' : '✅ Shift started (no GPS fix — check Location permission)');
+  render();
+}
+async function addStop(type, btn){
+  let note = '';
+  if (type === 'other'){ note = prompt('What is this stop? (optional)') ?? ''; }
+  btn.disabled = true; const old = btn.innerHTML; btn.textContent = '…';
+  const t = Date.now();
+  const pos = await getPos();
+  active.stops.push({ id: uid(), t, type, note, ...(pos || {}) });
+  saveActive();
+  toast(`${TYPES[type].label} logged at ${fmtTime(t)}${pos ? '' : ' (no GPS)'}`);
+  btn.innerHTML = old; btn.disabled = false;
+  render();
+}
+
+/* ---------- Shift form (end shift / edit / manual add) ---------- */
+function openShiftForm(s, mode){
+  const isNew = mode === 'manual';
+  if (isNew){
+    const now = Date.now();
+    s = { id: uid(), start: { t: now - 4*3.6e6, label: settings.homeLabel }, end: { t: now, label: settings.homeLabel }, stops: [], expenses: [],
+      mpg: settings.mpg, gasPrice: settings.gasPrice, taxPct: settings.taxPct, irsRate: settings.irsRate, manual: true };
+  }
+  const endT = (s.end && s.end.t) || Date.now();
+  const endLabel = (s.end && s.end.label) ?? settings.homeLabel;
+  const exps = (s.expenses && s.expenses.length) ? s.expenses : [];
+  let posPromise = mode === 'end' ? getPos() : null; // grab GPS while the form is filled out
+  const title = mode === 'end' ? 'End Shift' : isNew ? 'Add Shift' : 'Edit Shift';
+  const root = $('#modal-root');
+  root.innerHTML = `<div class="modal"><div class="sheet">
+    <div class="spread"><h2>${title}</h2><button class="btn-link" id="f-close">Cancel</button></div>
+    <div class="grid2">
+      <div><label>Start</label><input type="datetime-local" id="f-st" value="${toLocalInput(s.start.t)}"></div>
+      <div><label>End</label><input type="datetime-local" id="f-et" value="${toLocalInput(endT)}"></div>
+      <div><label>Start odometer</label><input id="f-o1" inputmode="decimal" value="${s.start.odo ?? ''}"></div>
+      <div><label>End odometer</label><input id="f-o2" inputmode="decimal" value="${(s.end && s.end.odo) ?? ''}" ${mode === 'end' ? 'autofocus' : ''}></div>
+      <div><label>Started from</label><input id="f-sl" value="${esc(s.start.label || '')}"></div>
+      <div><label>Ended at</label><input id="f-el" value="${esc(endLabel)}"></div>
+    </div>
+    <label>Miles (only if no odometer — leave blank to use odometer/GPS)</label>
+    <input id="f-mo" inputmode="decimal" value="${s.milesOverride ?? ''}">
+    <div class="grid2">
+      <div><label>Pay (Spark base + incentives)</label><input id="f-pay" inputmode="decimal" placeholder="0.00" value="${s.pay ?? ''}"></div>
+      <div><label>Tips</label><input id="f-tips" inputmode="decimal" placeholder="0.00" value="${s.tips ?? ''}"></div>
+    </div>
+    <label>Other expenses (not gas — tolls, parking, food, car wash…)</label>
+    <div id="f-exps">${exps.map(expRow).join('')}</div>
+    <button class="btn-sm" id="f-addexp">+ Add expense</button>
+    <div class="grid3">
+      <div><label>MPG</label><input id="f-mpg" inputmode="decimal" value="${s.mpg ?? settings.mpg}"></div>
+      <div><label>Gas $/gal</label><input id="f-gp" inputmode="decimal" value="${s.gasPrice ?? settings.gasPrice}"></div>
+      <div><label>Tax %</label><input id="f-tax" inputmode="decimal" value="${s.taxPct ?? settings.taxPct}"></div>
+    </div>
+    <label>Notes</label><input id="f-notes" value="${esc(s.notes || '')}">
+    <div style="height:16px"></div>
+    <button class="btn-go" id="f-save">${mode === 'end' ? 'Save & End Shift' : 'Save'}</button>
+  </div></div>`;
+  const close = () => root.innerHTML = '';
+  $('#f-close').onclick = close;
+  $('#f-addexp').onclick = () => { $('#f-exps').insertAdjacentHTML('beforeend', expRow({})); bindExp(); };
+  bindExp();
+  $('#f-save').onclick = async () => {
+    const st = new Date($('#f-st').value).getTime(), et = new Date($('#f-et').value).getTime();
+    if (isNaN(st) || isNaN(et) || et <= st){ toast('End time must be after start time'); return; }
+    const o1 = num($('#f-o1').value), o2 = num($('#f-o2').value);
+    if (o1 != null && o2 != null && o2 < o1){ toast('End odometer is lower than start'); return; }
+    $('#f-save').disabled = true; $('#f-save').textContent = 'Saving…';
+    s.start.t = st; s.start.odo = o1; s.start.label = $('#f-sl').value.trim();
+    s.end = s.end || {};
+    s.end.t = et; s.end.odo = o2; s.end.label = $('#f-el').value.trim();
+    if (posPromise){ const pos = await posPromise; if (pos) Object.assign(s.end, pos); }
+    s.milesOverride = num($('#f-mo').value);
+    s.pay = num($('#f-pay').value); s.tips = num($('#f-tips').value);
+    s.expenses = [...document.querySelectorAll('.exp-row')].map(r => ({ desc: r.querySelector('.e-d').value.trim(), amt: num(r.querySelector('.e-a').value) })).filter(e => e.amt);
+    s.mpg = num($('#f-mpg').value) || settings.mpg; s.gasPrice = num($('#f-gp').value) ?? settings.gasPrice; s.taxPct = num($('#f-tax').value) ?? settings.taxPct;
+    s.notes = $('#f-notes').value.trim();
+    if (mode === 'end'){ shifts.push(s); active = null; saveActive(); keepAwake(false); }
+    else if (isNew){ shifts.push(s); }
+    saveShifts();
+    close();
+    go('detail', s.id);
+    toast(mode === 'end' ? '✅ Shift saved' : '✅ Saved');
+  };
+}
+function expRow(e){ return `<div class="exp-row"><input class="e-d" placeholder="Description" value="${esc(e.desc || '')}"><input class="e-a" inputmode="decimal" placeholder="$" value="${e.amt ?? ''}"><button class="e-x" aria-label="Remove">✕</button></div>`; }
+function bindExp(){ document.querySelectorAll('.e-x').forEach(b => b.onclick = () => b.parentElement.remove()); }
+
+/* ---------- Spark log import ---------- */
+function parseLog(txt){
+  return txt.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
+    const m = l.match(/^(.+?)\s*[,|;]\s*(-?\d+(?:\.\d+)?)\s*[,|;]\s*(-?\d+(?:\.\d+)?)/);
+    if (!m) return null;
+    const t = Date.parse(m[1].trim());
+    if (isNaN(t)) return null;
+    return { t, lat: +m[2], lon: +m[3] };
+  }).filter(Boolean);
+}
+function importIntoShift(s, entries){
+  const from = s.start.t - 60e3, to = ((s.end && s.end.t) || Date.now()) + 60e3;
+  let added = 0;
+  entries.filter(e => e.t >= from && e.t <= to).sort((a,b) => a.t - b.t).forEach(e => {
+    // skip if close in time AND place to an existing stop (Spark opens many times at one location)
+    const dup = (s.stops || []).some(p => Math.abs(p.t - e.t) < 4*60e3 && (p.lat == null || haversine(p, e) < 0.1));
+    if (dup) return;
+    s.stops.push({ id: uid(), t: e.t, type: 'spark', lat: e.lat, lon: e.lon, auto: true });
+    added++;
+  });
+  return added;
+}
+function openImport(s){
+  const root = $('#modal-root');
+  root.innerHTML = `<div class="modal"><div class="sheet">
+    <div class="spread"><h2>Import Spark log</h2><button class="btn-link" id="i-close">Cancel</button></div>
+    <p class="small muted">Pick the <b>SparkLog.txt</b> file your Shortcut creates (iCloud Drive → Shortcuts folder). Only entries during this shift are added, and repeats at the same spot are skipped.</p>
+    <input type="file" id="i-file" accept=".txt,text/plain">
+    <label>…or paste the log text</label>
+    <textarea id="i-text" placeholder="2026-10-07T17:47:00-07:00,33.4484,-112.0740"></textarea>
+    <div style="height:12px"></div>
+    <button class="btn-go" id="i-go">Import</button>
+  </div></div>`;
+  $('#i-close').onclick = () => root.innerHTML = '';
+  $('#i-file').onchange = async e => { const f = e.target.files[0]; if (f) $('#i-text').value = await f.text(); };
+  $('#i-go').onclick = () => {
+    const entries = parseLog($('#i-text').value);
+    if (!entries.length){ toast('No log entries found in that text'); return; }
+    const n = importIntoShift(s, entries);
+    if (s === active) saveActive(); else saveShifts();
+    root.innerHTML = '';
+    toast(n ? `Added ${n} stop${n === 1 ? '' : 's'} from Spark log` : 'No new stops in this shift\'s time window', 3500);
+    if (s !== active) geocodeShift(s).then(() => { saveShifts(); if (view === 'detail') render(); });
+    render();
+  };
+}
+
+/* ---------- History ---------- */
+function renderHistory(){
+  $('#title').textContent = 'History';
+  const list = shifts.slice().sort((a,b) => b.start.t - a.start.t);
+  $('#main').innerHTML = `
+    <button id="h-add">+ Add a past shift manually</button>
+    <div class="card list">${list.length ? list.map(s => {
+      const c = calc(s);
+      return `<div class="item" data-open="${s.id}" style="cursor:pointer">
+        <div><b>${fmtDate(s.start.t)}</b><div class="small muted">${fmtTime(s.start.t)}–${fmtTime(s.end.t)} · ${fmtDur(s.end.t - s.start.t)} · ${mi(c.miles)} · ${(s.stops||[]).length} stops</div></div>
+        <div style="text-align:right"><b>${money(c.takeHome)}</b><div class="small muted">${money(c.hourlyTrue)}/hr</div></div></div>`;
+    }).join('') : '<p class="muted">No shifts yet. Start one from the Drive tab.</p>'}</div>`;
+  $('#h-add').onclick = () => openShiftForm(null, 'manual');
+  document.querySelectorAll('[data-open]').forEach(el => el.onclick = () => go('detail', el.dataset.open));
+}
+
+/* ---------- Shift detail ---------- */
+function renderDetail(){
+  const s = shifts.find(x => x.id === detailId);
+  if (!s){ go('history'); return; }
+  $('#title').textContent = fmtDateShort(s.start.t);
+  const c = calc(s);
+  const pts = points(s);
+  const routeOk = s.route && s.route.key === routeKey(s);
+  // legs between consecutive GPS points
+  let legIdx = 0, prevGps = null, stopN = 0;
+  const rows = pts.map((p, i) => {
+    let roadMi = '';
+    if (p.lat != null){
+      if (prevGps && routeOk && s.route.legs[legIdx]){ roadMi = (s.route.legs[legIdx].m / 1609.344).toFixed(1); legIdx++; }
+      else if (prevGps){ roadMi = '~' + (haversine(prevGps, p) * 1.25).toFixed(1); }
+      prevGps = p;
+    }
+    const since = i ? fmtDur(p.t - pts[i-1].t) : '';
+    const T = TYPES[p.type] || TYPES.other;
+    const name = p.type === 'start' || p.type === 'end' ? `${T.label}${p.label ? ' – ' + esc(p.label) : ''}` : `${++stopN}. ${T.label}`;
+    return `<tr><td><span class="dot" style="background:${T.color}"></span>${name}<div class="small muted">${esc(p.addr || '')}${p.note ? ' ' + esc(p.note) : ''}</div></td>
+      <td class="num">${fmtTime(p.t)}</td><td class="num">${since}</td><td class="num">${roadMi}</td></tr>`;
+  }).join('');
+  $('#main').innerHTML = `
+    <button class="btn-link" id="d-back">‹ History</button>
+    <div class="small muted">${fmtDate(s.start.t)} · ${fmtTime(s.start.t)} – ${fmtTime(s.end.t)}</div>
+    <div id="map-detail" class="map tall"></div>
+    <div class="grid2">
+      <div class="stat hl"><div class="k">Take-home pay</div><div class="v">${money(c.takeHome)}</div></div>
+      <div class="stat hl"><div class="k">True hourly (after gas & tax)</div><div class="v">${money(c.hourlyTrue)}/hr</div></div>
+      <div class="stat"><div class="k">Gross hourly (pay + tips)</div><div class="v">${money(c.hourlyGross)}/hr</div></div>
+      <div class="stat"><div class="k">Miles · ${esc(c.source)}</div><div class="v">${mi(c.miles)}</div></div>
+    </div>
+    <div class="card"><table class="money">
+      <tr><td>Hours worked</td><td>${c.hours.toFixed(2)} (${fmtDur(s.end.t - s.start.t)})</td></tr>
+      <tr><td>Pay</td><td>${money(c.pay)}</td></tr>
+      <tr><td>Tips</td><td>${money(c.tips)}</td></tr>
+      <tr class="total"><td>Gross</td><td>${money(c.gross)}</td></tr>
+      <tr><td>Est. gas (${mi(c.miles)} ÷ ${c.mpg} MPG × ${money(c.gasPrice)})</td><td>-${money(c.gas)}</td></tr>
+      ${(s.expenses||[]).map(e => `<tr><td>${esc(e.desc || 'Expense')}</td><td>-${money(num(e.amt))}</td></tr>`).join('')}
+      <tr class="total"><td>Net before tax</td><td>${money(c.net)}</td></tr>
+      <tr><td>Est. tax (${c.taxPct}%)</td><td>-${money(c.tax)}</td></tr>
+      <tr class="total"><td>Take-home</td><td>${money(c.takeHome)}</td></tr>
+      <tr><td class="muted">Gross per mile</td><td class="muted">${money(c.perMile)}</td></tr>
+      <tr><td class="muted">IRS mileage deduction (${money(c.irsRate)}/mi)</td><td class="muted">${money(c.irsDeduction)}</td></tr>
+      ${s.start.odo != null ? `<tr><td class="muted">Odometer</td><td class="muted">${s.start.odo} → ${s.end.odo ?? '?'}</td></tr>` : ''}
+      ${c.gpsMiles != null && c.source === 'Odometer' ? `<tr><td class="muted">GPS estimate (for comparison)</td><td class="muted">${mi(c.gpsMiles)}</td></tr>` : ''}
+    </table>${s.notes ? `<p class="small muted">${esc(s.notes)}</p>` : ''}</div>
+    <div class="card"><b>Route & stops</b>
+      <table style="margin-top:6px"><tr><th>Stop</th><th class="num">Time</th><th class="num">Since last</th><th class="num">Miles</th></tr>${rows}</table>
+      <p class="small muted">${routeOk ? 'Miles between stops follow the road route.' : '~ = straight-line estimate (route not loaded yet).'}</p>
+    </div>
+    ${(s.stops||[]).length ? `<div class="card"><b>Edit stops</b><div class="list">${s.stops.slice().sort((a,b)=>a.t-b.t).map(stopRow).join('')}</div></div>` : ''}
+    <div class="grid2">
+      <button id="d-edit">✏️ Edit shift</button>
+      <button id="d-import">⬇ Import Spark log</button>
+    </div>
+    <div style="height:10px"></div>
+    <button id="d-del" style="background:none;color:var(--red)">Delete shift</button>`;
+  $('#d-back').onclick = () => go('history');
+  $('#d-edit').onclick = () => openShiftForm(s, 'edit');
+  $('#d-import').onclick = () => openImport(s);
+  $('#d-del').onclick = () => { if (confirm('Delete this shift permanently?')){ shifts = shifts.filter(x => x.id !== s.id); saveShifts(); go('history'); } };
+  bindStopRows(s, false);
+  drawMap('map-detail', s, { route: true, onRoute: () => { saveShifts(); if (view === 'detail' && detailId === s.id) render(); } });
+  if (points(s).some(p => p.lat != null && !p.addr && !p.geoTried)) geocodeShift(s).then(() => { saveShifts(); if (view === 'detail' && detailId === s.id) render(); });
+}
+
+/* ---------- Summary ---------- */
+const PERIODS = { today:'Today', week:'This week', lastweek:'Last week', month:'This month', lastmonth:'Last month', year:'This year', all:'All time' };
+function periodRange(p){
+  const now = new Date(), d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const monday = new Date(d0); monday.setDate(d0.getDate() - ((d0.getDay() + 6) % 7));
+  switch (p){
+    case 'today': return [d0.getTime(), Infinity];
+    case 'week': return [monday.getTime(), Infinity];
+    case 'lastweek': { const a = new Date(monday); a.setDate(a.getDate() - 7); return [a.getTime(), monday.getTime()]; }
+    case 'month': return [new Date(now.getFullYear(), now.getMonth(), 1).getTime(), Infinity];
+    case 'lastmonth': return [new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime(), new Date(now.getFullYear(), now.getMonth(), 1).getTime()];
+    case 'year': return [new Date(now.getFullYear(), 0, 1).getTime(), Infinity];
+    default: return [0, Infinity];
+  }
+}
+function shiftsIn(p){ const [a, b] = periodRange(p); return shifts.filter(s => s.start.t >= a && s.start.t < b).sort((x,y) => x.start.t - y.start.t); }
+function totals(list){
+  const t = { n: list.length, hours:0, miles:0, pay:0, tips:0, gross:0, gas:0, expenses:0, net:0, tax:0, takeHome:0, irs:0, stops:0 };
+  list.forEach(s => { const c = calc(s); t.hours += c.hours; t.miles += c.miles; t.pay += c.pay; t.tips += c.tips; t.gross += c.gross; t.gas += c.gas; t.expenses += c.expenses; t.net += c.net; t.tax += c.tax; t.takeHome += c.takeHome; t.irs += c.irsDeduction; t.stops += (s.stops||[]).length; });
+  t.hourlyGross = t.hours ? t.gross / t.hours : 0; t.hourlyTrue = t.hours ? t.takeHome / t.hours : 0; t.perMile = t.miles ? t.gross / t.miles : 0;
+  return t;
+}
+function renderSummary(){
+  $('#title').textContent = 'Summary';
+  const list = shiftsIn(period), t = totals(list);
+  $('#main').innerHTML = `
+    <div class="chips">${Object.entries(PERIODS).map(([k, v]) => `<button class="chip ${k === period ? 'on' : ''}" data-p="${k}">${v}</button>`).join('')}</div>
+    <div class="grid2" style="margin-top:8px">
+      <div class="stat hl"><div class="k">Take-home</div><div class="v">${money(t.takeHome)}</div></div>
+      <div class="stat hl"><div class="k">True hourly</div><div class="v">${money(t.hourlyTrue)}/hr</div></div>
+      <div class="stat"><div class="k">Gross hourly</div><div class="v">${money(t.hourlyGross)}/hr</div></div>
+      <div class="stat"><div class="k">Miles</div><div class="v">${t.miles.toFixed(1)}</div></div>
+    </div>
+    <div class="card"><table class="money">
+      <tr><td>Shifts</td><td>${t.n}</td></tr>
+      <tr><td>Hours</td><td>${t.hours.toFixed(1)}</td></tr>
+      <tr><td>Stops logged</td><td>${t.stops}</td></tr>
+      <tr><td>Pay</td><td>${money(t.pay)}</td></tr>
+      <tr><td>Tips</td><td>${money(t.tips)}</td></tr>
+      <tr class="total"><td>Gross</td><td>${money(t.gross)}</td></tr>
+      <tr><td>Est. gas</td><td>-${money(t.gas)}</td></tr>
+      <tr><td>Other expenses</td><td>-${money(t.expenses)}</td></tr>
+      <tr class="total"><td>Net before tax</td><td>${money(t.net)}</td></tr>
+      <tr><td>Est. tax</td><td>-${money(t.tax)}</td></tr>
+      <tr class="total"><td>Take-home</td><td>${money(t.takeHome)}</td></tr>
+      <tr><td class="muted">Gross per mile</td><td class="muted">${money(t.perMile)}</td></tr>
+      <tr><td class="muted">IRS mileage deduction</td><td class="muted">${money(t.irs)}</td></tr>
+    </table></div>
+    <div class="card">
+      <b>Export & backup</b>
+      <p class="small muted">The IRS log lists date, odometer readings, miles, business purpose and where you went for every shift in <b>${PERIODS[period].toLowerCase()}</b>. Opens in Excel or Google Sheets.</p>
+      <button id="x-csv">📄 Export IRS mileage log (CSV)</button>
+      <div style="height:8px"></div>
+      <button id="x-backup">💾 Back up all data</button>
+      <div style="height:8px"></div>
+      <button id="x-restore">♻️ Restore from backup</button>
+      <input type="file" id="x-file" accept=".json,application/json" style="display:none">
+    </div>`;
+  document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { period = b.dataset.p; render(); });
+  $('#x-csv').onclick = () => exportCSV(list);
+  $('#x-backup').onclick = backup;
+  $('#x-restore').onclick = () => $('#x-file').click();
+  $('#x-file').onchange = restore;
+}
+
+/* ---------- Export / backup ---------- */
+async function shareOrDownload(name, text, type){
+  const blob = new Blob([text], {type});
+  const file = new File([blob], name, {type});
+  if (navigator.canShare && navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file], title:name}); return; }catch(e){ if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function csvCell(v){ v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+function exportCSV(list){
+  if (!list.length){ toast('No shifts in this period'); return; }
+  const head = ['Date','Start time','End time','Hours','Start location','End location','Start odometer','End odometer','Business miles','Miles source','Business purpose','Stops (in order)','Pay','Tips','Gross','Est gas cost','Other expenses','Net before tax','Est tax','Take-home','Gross $/hr','True $/hr','IRS deduction'];
+  const rows = list.map(s => {
+    const c = calc(s);
+    const stops = (s.stops||[]).slice().sort((a,b)=>a.t-b.t).map(p => `${fmtTime(p.t)} ${TYPES[p.type]?.label || p.type}${p.addr ? ' @ ' + p.addr : ''}`).join(' | ');
+    return [fmtDateShort(s.start.t), fmtTime(s.start.t), fmtTime(s.end.t), c.hours.toFixed(2),
+      [s.start.label, s.start.addr].filter(Boolean).join(' – '), [s.end.label, s.end.addr].filter(Boolean).join(' – '),
+      s.start.odo ?? '', s.end.odo ?? '', c.miles.toFixed(1), c.source, settings.purpose, stops,
+      c.pay.toFixed(2), c.tips.toFixed(2), c.gross.toFixed(2), c.gas.toFixed(2), c.expenses.toFixed(2), c.net.toFixed(2), c.tax.toFixed(2), c.takeHome.toFixed(2),
+      c.hourlyGross.toFixed(2), c.hourlyTrue.toFixed(2), c.irsDeduction.toFixed(2)];
+  });
+  const t = totals(list);
+  rows.push(['TOTAL','','',t.hours.toFixed(2),'','','','',t.miles.toFixed(1),'','','',t.pay.toFixed(2),t.tips.toFixed(2),t.gross.toFixed(2),t.gas.toFixed(2),t.expenses.toFixed(2),t.net.toFixed(2),t.tax.toFixed(2),t.takeHome.toFixed(2),t.hourlyGross.toFixed(2),t.hourlyTrue.toFixed(2),t.irs.toFixed(2)]);
+  const csv = [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+  shareOrDownload(`mileage-log-${period}-${new Date().toISOString().slice(0,10)}.csv`, csv, 'text/csv');
+}
+function backup(){
+  const data = { app:'mileage-tracker', version:1, exported:new Date().toISOString(), settings, shifts, active };
+  shareOrDownload(`mileage-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data), 'application/json');
+  LS.set('mt_lastBackup', Date.now());
+}
+async function restore(e){
+  const f = e.target.files[0]; if (!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    if (data.app !== 'mileage-tracker' || !Array.isArray(data.shifts)) throw 0;
+    const ids = new Set(shifts.map(s => s.id));
+    const incoming = data.shifts.filter(s => !ids.has(s.id));
+    if (!confirm(`Backup has ${data.shifts.length} shifts. Add the ${incoming.length} you don't already have?`)) return;
+    shifts = shifts.concat(incoming); saveShifts();
+    toast(`Restored ${incoming.length} shifts`); render();
+  }catch(err){ toast('That file is not a Mileage Tracker backup'); }
+}
+
+/* ---------- Settings ---------- */
+function renderSettings(){
+  $('#title').textContent = 'Settings';
+  const lb = LS.get('mt_lastBackup', null);
+  $('#main').innerHTML = `
+    <div class="card">
+      <p class="small muted" style="margin-top:0">These are the defaults for new shifts. You can change them on any single shift too.</p>
+      <div class="grid2">
+        <div><label>Your car's MPG</label><input id="s-mpg" inputmode="decimal" value="${settings.mpg}"></div>
+        <div><label>Gas price ($/gal)</label><input id="s-gp" inputmode="decimal" value="${settings.gasPrice}"></div>
+        <div><label>Tax set-aside %</label><input id="s-tax" inputmode="decimal" value="${settings.taxPct}"></div>
+        <div><label>IRS rate ($/mile)</label><input id="s-irs" inputmode="decimal" value="${settings.irsRate}"></div>
+      </div>
+      <label>Home location name</label><input id="s-home" value="${esc(settings.homeLabel)}">
+      <label>Business purpose (for IRS log)</label><input id="s-purpose" value="${esc(settings.purpose)}">
+      <div style="height:14px"></div>
+      <button class="btn-go" id="s-save">Save settings</button>
+    </div>
+    <div class="card small muted">
+      <b style="color:var(--text)">About the numbers</b><br>
+      Est. gas = miles ÷ MPG × gas price. Net before tax = pay + tips − gas − other expenses. Est. tax = your % of net. Take-home = net − tax.
+      True hourly = take-home ÷ hours from start to end of shift.<br><br>
+      Self-employment tax alone is 15.3%, so 25–30% is a common set-aside. The IRS business rate was 72.5¢ for Jan–Jun 2026 and 76¢ from July 1, 2026 — check irs.gov each year.
+    </div>
+    <div class="card small muted">
+      <b style="color:var(--text)">Your data</b><br>
+      Everything is stored only on this phone. ${shifts.length} shifts saved. Last backup: ${lb ? fmtDate(lb) : 'never'}.
+      Back up weekly from the Summary tab and save the file to iCloud Drive.
+      <div style="height:10px"></div>
+      <button id="s-wipe" style="background:none;color:var(--red)">Erase all data</button>
+    </div>`;
+  $('#s-save').onclick = () => {
+    settings.mpg = num($('#s-mpg').value) || DEFAULTS.mpg;
+    settings.gasPrice = num($('#s-gp').value) ?? DEFAULTS.gasPrice;
+    settings.taxPct = num($('#s-tax').value) ?? DEFAULTS.taxPct;
+    settings.irsRate = num($('#s-irs').value) ?? DEFAULTS.irsRate;
+    settings.homeLabel = $('#s-home').value.trim() || 'Home';
+    settings.purpose = $('#s-purpose').value.trim() || DEFAULTS.purpose;
+    saveSettings(); toast('✅ Settings saved');
+  };
+  $('#s-wipe').onclick = () => {
+    if (confirm('Erase ALL shifts and settings? This cannot be undone.') && confirm('Are you sure? Make a backup first if unsure.')){
+      shifts = []; active = null; localStorage.clear(); settings = Object.assign({}, DEFAULTS); render(); toast('All data erased');
+    }
+  };
+}
+
+/* ============ Boot ============ */
+if (active) view = 'drive';
+render();
+</script>
+</body>
+</html>
