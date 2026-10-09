@@ -55,6 +55,15 @@ textarea{min-height:90px}
 .stat.hl{background:#14532d} .stat.hl .k{color:#bbf7d0}
 .stat.blue{background:#1e3a5f} .stat.blue .k{color:#bfdbfe}
 .money tr.b td{font-weight:700}
+/* Pay / Tips drawn as branches under Gross Pay */
+.money tr.parent td{border-bottom:none}
+.money tr.sub td{border-bottom:none;padding-top:5px;padding-bottom:5px}
+.money tr.sub.last td{border-bottom:1px solid var(--line);padding-bottom:9px}
+.money tr.sub td:first-child{padding-left:32px;position:relative}
+.money tr.sub td:first-child::before{content:'';position:absolute;left:10px;top:0;bottom:0;border-left:2px solid #6b7280}
+.money tr.sub td:first-child::after{content:'';position:absolute;left:10px;top:50%;width:14px;border-top:2px solid #6b7280}
+.money tr.sub.last td:first-child::before{bottom:calc(50% - 2px)}
+.money tr.sub.last td:first-child::after{top:calc(50% - 2px);border-bottom-left-radius:4px}
 .money tr.neg td{color:#f87171}
 b.sec{display:block;font-size:17px;margin-bottom:4px}
 .btn-danger{background:#4c1d1d;color:#fca5a5}
@@ -734,10 +743,10 @@ function openImport(s){
 const negMoney = v => v > 0.004 ? '-' + money(v) : money(0);
 function statBoxes(v){
   return `<div class="grid2">
-    <div class="stat blue"><div class="k">Gross Pay</div><div class="v">${money(v.gross)}</div></div>
+    <div class="stat blue"><div class="k">Gross Pay (pay + tips)</div><div class="v">${money(v.gross)}</div></div>
     <div class="stat blue"><div class="k">Gross Hourly Rate</div><div class="v">${money(v.hourlyGross)}/hr</div></div>
-    <div class="stat hl"><div class="k">Actual Pay (after gas + tax)</div><div class="v">${money(v.takeHome)}</div></div>
-    <div class="stat hl"><div class="k">Actual Hourly Rate (after gas + tax)</div><div class="v">${money(v.hourlyTrue)}/hr</div></div>
+    <div class="stat hl"><div class="k">Actual Pay (after gas + tax + expenses)</div><div class="v">${money(v.takeHome)}</div></div>
+    <div class="stat hl"><div class="k">Actual Hourly Rate (after gas + tax + expenses)</div><div class="v">${money(v.hourlyTrue)}/hr</div></div>
     <div class="stat"><div class="k">Hours Worked</div><div class="v">${fmtDur(v.hours * 3.6e6)}</div></div>
     <div class="stat"><div class="k">Miles${v.source ? ' · ' + esc(v.source) : ''}</div><div class="v">${mi(v.miles)}</div></div>
     <div class="stat warn"><div class="k">Est. Tax${v.taxPct != null ? ` (${v.taxPct}%)` : ''}</div><div class="v">${negMoney(v.tax)}</div></div>
@@ -748,12 +757,18 @@ function breakdownCard(v){
   return `<div class="card"><b class="sec">Breakdown</b><table class="money">
     ${v.top || ''}
     <tr class="b"><td>Hours Worked</td><td>${fmtDur(v.hours * 3.6e6)}</td></tr>
-    <tr class="b"><td>Gross Pay</td><td>${money(v.gross)}</td></tr>
-    <tr class="b"><td>Tips</td><td>${money(v.tips)}</td></tr>
-    <tr class="neg"><td>Est. Gas${v.gasDetail ? ' (' + v.gasDetail + ')' : ''}</td><td>${negMoney(v.gas)}</td></tr>
-    ${(v.expenses || []).map(e => `<tr class="neg"><td>${esc(e.desc || 'Other expense')}</td><td>${negMoney(e.amt)}</td></tr>`).join('')}
-    <tr class="neg"><td>Est. Tax${v.taxPct != null ? ` (${v.taxPct}%)` : ''}</td><td>${negMoney(v.tax)}</td></tr>
-    <tr class="total"><td>Actual Pay (after gas + tax)</td><td>${money(v.takeHome)}</td></tr>
+    <tr class="b parent"><td>Gross Pay (pay + tips)</td><td>${money(v.gross)}</td></tr>
+    <tr class="b sub"><td>Pay</td><td>${money(v.pay)}</td></tr>
+    <tr class="b sub last"><td>Tips</td><td>${money(v.tips)}</td></tr>
+    <tr class="b parent"><td>Actual Pay (after gas + tax + expenses)</td><td>${money(v.takeHome)}</td></tr>
+    ${(() => {
+      const subs = [
+        [`Est. Gas${v.gasDetail ? ' (' + v.gasDetail + ')' : ''}`, v.gas],
+        [`Est. Tax${v.taxPct != null ? ` (${v.taxPct}%)` : ''}`, v.tax],
+        ...(v.expenses || []).map(e => [esc(e.desc || 'Other expense'), e.amt])
+      ];
+      return subs.map(([label, amt], i) => `<tr class="neg sub${i === subs.length - 1 ? ' last' : ''}"><td>${label}</td><td>${negMoney(amt)}</td></tr>`).join('');
+    })()}
     <tr><td class="muted">IRS Mileage Deduction${v.irsRate != null ? ` (${money(v.irsRate)}/mi)` : ''}</td><td class="muted">${money(v.irs)}</td></tr>
     ${v.odo ? `<tr><td class="muted">Odometer</td><td class="muted">${v.odo}</td></tr>` : ''}
   </table>${v.notes ? `<p class="small muted">${esc(v.notes)}</p>` : ''}</div>`;
@@ -932,7 +947,7 @@ function chartHTML(p){
     <div class="chart-head"><b>Earnings</b><span class="small muted">${esc(title)}</span></div>
     <div class="bars ${compact ? 'compact' : ''}" style="grid-template-columns:repeat(${B.length},1fr)">${cols}</div>
     <div class="spread small" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
-      <span class="muted">Pay + tips · miles inside bars</span><b>${money(totG)} · ${totM.toFixed(0)} mi</b></div>
+      <span class="muted">Gross Pay (pay + tips) · miles in bars</span><b>${money(totG)} · ${totM.toFixed(0)} mi</b></div>
   </div>`;
 }
 
