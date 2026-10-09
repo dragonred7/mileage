@@ -53,6 +53,11 @@ textarea{min-height:90px}
 .stat .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
 .stat .k{font-size:12px;color:var(--muted)}
 .stat.hl{background:#14532d} .stat.hl .k{color:#bbf7d0}
+.stat.blue{background:#1e3a5f} .stat.blue .k{color:#bfdbfe}
+.money tr.b td{font-weight:700}
+.money tr.neg td{color:#f87171}
+b.sec{display:block;font-size:17px;margin-bottom:4px}
+.btn-danger{background:#4c1d1d;color:#fca5a5}
 .stat.warn{background:#4c1d1d} .stat.warn .k{color:#fecaca} .stat.warn .v{color:#fca5a5}
 .pbar{height:8px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:8px}
 .pbar div{height:100%;background:var(--accent);transition:width .4s}
@@ -545,7 +550,7 @@ function renderDrive(){
     </div>
     <div id="map-live" class="map"></div>
     <div class="card">
-      <div class="spread"><b>Stops</b><button class="btn-link" id="btn-import">⬇ Import Spark log</button></div>
+      <b>Stops</b>
       <div class="list">${stops.length ? stops.map(stopRow).join('') : '<p class="muted small">Tap a button above when you arrive at a pickup or drop-off.</p>'}</div>
     </div>
     <button class="btn-stop" id="btn-end">■ End Shift</button>
@@ -554,7 +559,6 @@ function renderDrive(){
   timerInt = setInterval(() => { const t = $('#timer'); if (t) t.textContent = fmtClock(Date.now() - active.start.t); }, 1000);
   document.querySelectorAll('[data-stop]').forEach(b => b.onclick = () => addStop(b.dataset.stop, b));
   bindStopRows(active, true);
-  $('#btn-import').onclick = () => openImport(active);
   $('#btn-end').onclick = () => openShiftForm(active, 'end');
   $('#btn-cancel').onclick = () => { if (confirm('Discard this shift? Nothing will be saved.')){ active = null; saveActive(); keepAwake(false); render(); } };
   drawMap('map-live', active);
@@ -726,6 +730,35 @@ function openImport(s){
   };
 }
 
+/* ---------- Shared: stat boxes + breakdown (used by shift page and Summary) ---------- */
+const negMoney = v => v > 0.004 ? '-' + money(v) : money(0);
+function statBoxes(v){
+  return `<div class="grid2">
+    <div class="stat blue"><div class="k">Gross Pay</div><div class="v">${money(v.gross)}</div></div>
+    <div class="stat blue"><div class="k">Gross Hourly Rate</div><div class="v">${money(v.hourlyGross)}/hr</div></div>
+    <div class="stat hl"><div class="k">Actual Pay (after gas + tax)</div><div class="v">${money(v.takeHome)}</div></div>
+    <div class="stat hl"><div class="k">Actual Hourly Rate (after gas + tax)</div><div class="v">${money(v.hourlyTrue)}/hr</div></div>
+    <div class="stat"><div class="k">Hours Worked</div><div class="v">${fmtDur(v.hours * 3.6e6)}</div></div>
+    <div class="stat"><div class="k">Miles${v.source ? ' · ' + esc(v.source) : ''}</div><div class="v">${mi(v.miles)}</div></div>
+    <div class="stat warn"><div class="k">Est. Tax${v.taxPct != null ? ` (${v.taxPct}%)` : ''}</div><div class="v">${negMoney(v.tax)}</div></div>
+    <div class="stat warn"><div class="k">Est. Gas (${v.gallons.toFixed(1)} gal)</div><div class="v">${negMoney(v.gas)}</div></div>
+  </div>`;
+}
+function breakdownCard(v){
+  return `<div class="card"><b class="sec">Breakdown</b><table class="money">
+    ${v.top || ''}
+    <tr class="b"><td>Hours Worked</td><td>${fmtDur(v.hours * 3.6e6)}</td></tr>
+    <tr class="b"><td>Gross Pay</td><td>${money(v.gross)}</td></tr>
+    <tr class="b"><td>Tips</td><td>${money(v.tips)}</td></tr>
+    <tr class="neg"><td>Est. Gas${v.gasDetail ? ' (' + v.gasDetail + ')' : ''}</td><td>${negMoney(v.gas)}</td></tr>
+    ${(v.expenses || []).map(e => `<tr class="neg"><td>${esc(e.desc || 'Other expense')}</td><td>${negMoney(e.amt)}</td></tr>`).join('')}
+    <tr class="neg"><td>Est. Tax${v.taxPct != null ? ` (${v.taxPct}%)` : ''}</td><td>${negMoney(v.tax)}</td></tr>
+    <tr class="total"><td>Actual Pay (after gas + tax)</td><td>${money(v.takeHome)}</td></tr>
+    <tr><td class="muted">IRS Mileage Deduction${v.irsRate != null ? ` (${money(v.irsRate)}/mi)` : ''}</td><td class="muted">${money(v.irs)}</td></tr>
+    ${v.odo ? `<tr><td class="muted">Odometer</td><td class="muted">${v.odo}</td></tr>` : ''}
+  </table>${v.notes ? `<p class="small muted">${esc(v.notes)}</p>` : ''}</div>`;
+}
+
 /* ---------- History ---------- */
 function renderHistory(){
   $('#title').textContent = 'History';
@@ -736,7 +769,7 @@ function renderHistory(){
       const c = calc(s);
       return `<div class="item" data-open="${s.id}" style="cursor:pointer">
         <div><b>${fmtDate(s.start.t)}</b><div class="small muted">${fmtTime(s.start.t)}–${fmtTime(s.end.t)} · ${fmtDur(s.end.t - s.start.t)} · ${mi(c.miles)} · ${(s.stops||[]).length} stops</div></div>
-        <div style="text-align:right"><b>${money(c.takeHome)}</b><div class="small muted">${money(c.hourlyTrue)}/hr</div></div></div>`;
+        <div style="text-align:right"><b>${money(c.gross)}</b><div class="small muted">${money(c.hourlyGross)}/hr</div></div></div>`;
     }).join('') : '<p class="muted">No shifts yet. Start one from the Drive tab.</p>'}</div>`;
   $('#h-add').onclick = () => openShiftForm(null, 'manual');
   document.querySelectorAll('[data-open]').forEach(el => el.onclick = () => go('detail', el.dataset.open));
@@ -773,44 +806,27 @@ function renderDetail(){
     </div>
     <div id="geo-status" class="card" style="display:none"></div>
     <div id="map-detail" class="map tall"></div>
-    <div class="grid2">
-      <div class="stat hl"><div class="k">Take-home pay</div><div class="v">${money(c.takeHome)}</div></div>
-      <div class="stat hl"><div class="k">True hourly (after gas & tax)</div><div class="v">${money(c.hourlyTrue)}/hr</div></div>
-      <div class="stat"><div class="k">Gross hourly (pay + tips)</div><div class="v">${money(c.hourlyGross)}/hr</div></div>
-      <div class="stat"><div class="k">Miles · ${esc(c.source)}</div><div class="v">${mi(c.miles)}</div></div>
-      <div class="stat warn"><div class="k">Est. tax (${c.taxPct}%)</div><div class="v">${money(c.tax)}</div></div>
-      <div class="stat warn"><div class="k">Est. gas (${c.gallons.toFixed(1)} gal)</div><div class="v">${money(c.gas)}</div></div>
-    </div>
-    <div class="card"><table class="money">
-      <tr><td>Hours worked</td><td>${c.hours.toFixed(2)} (${fmtDur(s.end.t - s.start.t)})</td></tr>
-      <tr><td>Pay</td><td>${money(c.pay)}</td></tr>
-      <tr><td>Tips</td><td>${money(c.tips)}</td></tr>
-      <tr class="total"><td>Gross</td><td>${money(c.gross)}</td></tr>
-      <tr><td>Est. gas (${mi(c.miles)} ÷ ${c.mpg} MPG × ${money(c.gasPrice)})</td><td>-${money(c.gas)}</td></tr>
-      ${(s.expenses||[]).map(e => `<tr><td>${esc(e.desc || 'Expense')}</td><td>-${money(num(e.amt))}</td></tr>`).join('')}
-      <tr class="total"><td>Net before tax</td><td>${money(c.net)}</td></tr>
-      <tr><td>Est. tax (${c.taxPct}%)</td><td>-${money(c.tax)}</td></tr>
-      <tr class="total"><td>Take-home</td><td>${money(c.takeHome)}</td></tr>
-      <tr><td class="muted">Gross per mile</td><td class="muted">${money(c.perMile)}</td></tr>
-      <tr><td class="muted">IRS mileage deduction (${money(c.irsRate)}/mi)</td><td class="muted">${money(c.irsDeduction)}</td></tr>
-      ${s.start.odo != null ? `<tr><td class="muted">Odometer</td><td class="muted">${s.start.odo} → ${s.end.odo ?? '?'}</td></tr>` : ''}
-      ${c.gpsMiles != null && c.source === 'Odometer' ? `<tr><td class="muted">GPS estimate (for comparison)</td><td class="muted">${mi(c.gpsMiles)}</td></tr>` : ''}
-    </table>${s.notes ? `<p class="small muted">${esc(s.notes)}</p>` : ''}</div>
-    <div class="card"><b>Route & stops</b>
+    ${statBoxes(c)}
+    ${breakdownCard({ ...c, irs: c.irsDeduction,
+      gasDetail: `${mi(c.miles)} ÷ ${c.mpg} MPG × ${money(c.gasPrice)}`,
+      expenses: (s.expenses || []).map(e => ({ desc: e.desc, amt: num(e.amt) || 0 })),
+      odo: s.start.odo != null ? `${s.start.odo} → ${s.end.odo ?? '?'}` : '', notes: s.notes })}
+    <div class="card"><b class="sec">Route & Stops</b>
       <table style="margin-top:6px"><tr><th>Stop</th><th class="num">Time</th><th class="num">Since last</th><th class="num">Miles</th></tr>${rows}</table>
       <p class="small muted">${routeOk ? 'Miles between stops follow the road route.' : '~ = straight-line estimate (route not loaded yet).'}</p>
     </div>
-    ${(s.stops||[]).length ? `<div class="card"><b>Edit stops</b><div class="list">${s.stops.slice().sort((a,b)=>a.t-b.t).map(stopRow).join('')}</div></div>` : ''}
+    ${(s.stops||[]).length ? `<div class="card"><b class="sec">Edit Stops</b><div class="list">${s.stops.slice().sort((a,b)=>a.t-b.t).map(stopRow).join('')}</div></div>` : ''}
     <div class="grid2">
-      <button id="d-edit">✏️ Edit shift</button>
-      <button id="d-import">⬇ Import Spark log</button>
-    </div>
-    <div style="height:10px"></div>
-    <button id="d-del" style="background:none;color:var(--red)">Delete shift</button>`;
+      <button id="d-edit">✏️ Edit Shift</button>
+      <button id="d-del" class="btn-danger">🗑️ Delete Shift</button>
+    </div>`;
   $('#d-back').onclick = () => go('history');
   $('#d-edit').onclick = () => openShiftForm(s, 'edit');
-  $('#d-import').onclick = () => openImport(s);
-  $('#d-del').onclick = () => { if (confirm('Delete this shift permanently?')){ shifts = shifts.filter(x => x.id !== s.id); saveShifts(); go('history'); } };
+  $('#d-del').onclick = () => {
+    const msg = `Are you sure you want to delete the shift from ${fmtDate(s.start.t)}?\n\nThis can't be undone${sync.url ? ' and it will also be removed from your Google Sheet' : ''}.`;
+    if (!confirm(msg)) return;
+    shifts = shifts.filter(x => x.id !== s.id); saveShifts(); go('history'); toast('Shift deleted');
+  };
   bindStopRows(s, false);
   drawMap('map-detail', s, { route: true, onRoute: () => { saveShifts(true); if (view === 'detail' && detailId === s.id) render(); } });
   updateGeoUI();
@@ -834,8 +850,8 @@ function periodRange(p){
 }
 function shiftsIn(p){ const [a, b] = periodRange(p); return shifts.filter(s => s.start.t >= a && s.start.t < b).sort((x,y) => x.start.t - y.start.t); }
 function totals(list){
-  const t = { n: list.length, hours:0, miles:0, pay:0, tips:0, gross:0, gas:0, expenses:0, net:0, tax:0, takeHome:0, irs:0, stops:0 };
-  list.forEach(s => { const c = calc(s); t.hours += c.hours; t.miles += c.miles; t.pay += c.pay; t.tips += c.tips; t.gross += c.gross; t.gas += c.gas; t.expenses += c.expenses; t.net += c.net; t.tax += c.tax; t.takeHome += c.takeHome; t.irs += c.irsDeduction; t.stops += (s.stops||[]).length; });
+  const t = { n: list.length, hours:0, miles:0, pay:0, tips:0, gross:0, gas:0, gallons:0, expenses:0, net:0, tax:0, takeHome:0, irs:0, stops:0 };
+  list.forEach(s => { const c = calc(s); t.hours += c.hours; t.miles += c.miles; t.pay += c.pay; t.tips += c.tips; t.gross += c.gross; t.gas += c.gas; t.gallons += c.gallons; t.expenses += c.expenses; t.net += c.net; t.tax += c.tax; t.takeHome += c.takeHome; t.irs += c.irsDeduction; t.stops += (s.stops||[]).length; });
   t.hourlyGross = t.hours ? t.gross / t.hours : 0; t.hourlyTrue = t.hours ? t.takeHome / t.hours : 0; t.perMile = t.miles ? t.gross / t.miles : 0;
   return t;
 }
@@ -865,7 +881,8 @@ function chartBuckets(p){
     const me = new Date(ms.getFullYear(), ms.getMonth() + 1, 1);
     for (let w = mondayOf(ms); w < me; w = addDays(w, 7)){
       const a = w < ms ? ms : w, e = addDays(w, 7), b = e > me ? me : e;
-      B.push({ a: a.getTime(), b: b.getTime(), top: `${a.getMonth()+1}/${a.getDate()}`, sub: `–${addDays(b, -1).getDate()}`, future: a > now, today: now >= a && now < b });
+      const last = addDays(b, -1);
+      B.push({ a: a.getTime(), b: b.getTime(), top: `${a.getMonth()+1}/${a.getDate()}`, sub: `thru ${last.getMonth()+1}/${last.getDate()}`, future: a > now, today: now >= a && now < b });
     }
     title = ms.toLocaleDateString([], {month:'long', year:'numeric'}) + ' · by week';
   } else {
@@ -925,29 +942,12 @@ function renderSummary(){
   $('#main').innerHTML = `
     <div class="chips">${Object.entries(PERIODS).map(([k, v]) => `<button class="chip ${k === period ? 'on' : ''}" data-p="${k}">${v}</button>`).join('')}</div>
     ${chartHTML(period)}
-    <div class="grid2" style="margin-top:8px">
-      <div class="stat hl"><div class="k">Take-home</div><div class="v">${money(t.takeHome)}</div></div>
-      <div class="stat hl"><div class="k">True hourly</div><div class="v">${money(t.hourlyTrue)}/hr</div></div>
-      <div class="stat"><div class="k">Gross hourly</div><div class="v">${money(t.hourlyGross)}/hr</div></div>
-      <div class="stat"><div class="k">Miles</div><div class="v">${t.miles.toFixed(1)}</div></div>
-      <div class="stat warn"><div class="k">Est. tax</div><div class="v">${money(t.tax)}</div></div>
-      <div class="stat warn"><div class="k">Est. gas</div><div class="v">${money(t.gas)}</div></div>
-    </div>
-    <div class="card"><table class="money">
-      <tr><td>Shifts</td><td>${t.n}</td></tr>
-      <tr><td>Hours</td><td>${t.hours.toFixed(1)}</td></tr>
-      <tr><td>Stops logged</td><td>${t.stops}</td></tr>
-      <tr><td>Pay</td><td>${money(t.pay)}</td></tr>
-      <tr><td>Tips</td><td>${money(t.tips)}</td></tr>
-      <tr class="total"><td>Gross</td><td>${money(t.gross)}</td></tr>
-      <tr><td>Est. gas</td><td>-${money(t.gas)}</td></tr>
-      <tr><td>Other expenses</td><td>-${money(t.expenses)}</td></tr>
-      <tr class="total"><td>Net before tax</td><td>${money(t.net)}</td></tr>
-      <tr><td>Est. tax</td><td>-${money(t.tax)}</td></tr>
-      <tr class="total"><td>Take-home</td><td>${money(t.takeHome)}</td></tr>
-      <tr><td class="muted">Gross per mile</td><td class="muted">${money(t.perMile)}</td></tr>
-      <tr><td class="muted">IRS mileage deduction</td><td class="muted">${money(t.irs)}</td></tr>
-    </table></div>
+    <div style="height:2px"></div>
+    ${statBoxes({ ...t, taxPct: null })}
+    ${breakdownCard({ ...t, taxPct: null, irsRate: null,
+      gasDetail: t.miles ? mi(t.miles) : '',
+      expenses: t.expenses > 0.004 ? [{ desc: 'Other expenses', amt: t.expenses }] : [],
+      top: `<tr><td class="muted">Shifts</td><td class="muted">${t.n}</td></tr><tr><td class="muted">Stops</td><td class="muted">${t.stops}</td></tr>` })}
     <div class="card">
       <b>Export & backup</b>
       <p class="small muted">The IRS log lists date, odometer readings, miles, business purpose and where you went for every shift in <b>${PERIODS[period].toLowerCase()}</b>. Opens in Excel or Google Sheets.</p>
