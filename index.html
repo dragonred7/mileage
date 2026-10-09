@@ -54,6 +54,8 @@ textarea{min-height:90px}
 .stat .k{font-size:12px;color:var(--muted)}
 .stat.hl{background:#14532d} .stat.hl .k{color:#bbf7d0}
 .stat.warn{background:#4c1d1d} .stat.warn .k{color:#fecaca} .stat.warn .v{color:#fca5a5}
+.pbar{height:8px;background:var(--bg);border-radius:4px;overflow:hidden;margin-top:8px}
+.pbar div{height:100%;background:var(--accent);transition:width .4s}
 .detail-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:2px 0 4px}
 .stop-count{background:var(--card2);border-radius:10px;padding:6px 12px;text-align:center;font-size:12px;color:var(--muted);line-height:1.1}
 .stop-count span{display:block;font-size:22px;font-weight:700;color:var(--text)}
@@ -97,7 +99,7 @@ nav button.on{color:var(--accent)}
 </style>
 </head>
 <body>
-<header><h1 id="title">Mileage Tracker</h1><span id="hdr-right" class="small muted"></span></header>
+<header><h1 id="title">Mileage Tracker</h1><span><span id="hdr-sync" class="small" style="margin-right:8px"></span><span id="hdr-geo" class="small muted" style="margin-right:8px"></span><span id="hdr-right" class="small muted"></span></span></header>
 <main id="main"></main>
 <nav>
   <button data-nav="drive" class="on"><span class="ic">🚗</span>Drive</button>
@@ -118,9 +120,132 @@ const DEFAULTS = { mpg:25, gasPrice:3.50, taxPct:25, irsRate:0.76, homeLabel:'Ho
 let settings = Object.assign({}, DEFAULTS, LS.get('mt_settings', {}));
 let shifts = LS.get('mt_shifts', []);
 let active = LS.get('mt_active', null);
-const saveShifts = () => LS.set('mt_shifts', shifts);
+// soft = a background update (street addresses, map route). It still syncs, but never
+// counts as a newer edit, so it can't overwrite a real change made on your other device.
+const saveShifts = (soft) => { trackChanges(soft === true); LS.set('mt_shifts', shifts); scheduleSync(); };
 const saveActive = () => active ? LS.set('mt_active', active) : localStorage.removeItem('mt_active');
-const saveSettings = () => LS.set('mt_settings', settings);
+const saveSettings = () => { settings.updated = Date.now(); LS.set('mt_settings', settings); scheduleSync(); };
+
+/* ============ Google Sheet sync ============
+   Every change to a shift is detected by fingerprinting it, stamped with the time,
+   and sent to your Google Sheet. Changes made on your other device come back the
+   same way. Newest edit wins. */
+let sync = Object.assign({ url:'', key:'', since:0, lastPush:0, settingsPushed:0, lastOk:0, err:'' }, LS.get('mt_sync', {}));
+let hashes = LS.get('mt_hashes', {});
+let tomb = LS.get('mt_tomb', []);
+let pending = new Set(LS.get('mt_pending', []));   // shift ids waiting to be sent
+const savePending = () => LS.set('mt_pending', [...pending]);
+const saveSync = () => LS.set('mt_sync', sync);
+function h32(str){ let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return h; }
+function shiftHash(s){ const { updated, ...rest } = s; return h32(JSON.stringify(rest)); }
+function trackChanges(soft){
+  const seen = {}, now = Date.now();
+  shifts.forEach(s => {
+    const h = shiftHash(s); seen[s.id] = h;           // fingerprint ignores the 'updated' stamp
+    if (hashes[s.id] === h) return;                   // unchanged
+    const isNew = hashes[s.id] === undefined;
+    if (!s.updated || (!soft && !isNew)) s.updated = now;  // real edits get a new time stamp
+    pending.add(s.id);
+  });
+  Object.keys(hashes).forEach(id => { if (!(id in seen)){ tomb.push({ id, t: now }); pending.delete(id); } });
+  hashes = seen;
+  LS.set('mt_hashes', hashes); LS.set('mt_tomb', tomb); savePending();
+}
+function sheetRow(s){
+  const c = calc(s);
+  return {
+    hours: +c.hours.toFixed(2),
+    startLoc: [s.start.label, s.start.addr].filter(Boolean).join(' – '),
+    endLoc: [s.end.label, s.end.addr].filter(Boolean).join(' – '),
+    odo1: s.start.odo ?? '', odo2: s.end.odo ?? '', miles: +c.miles.toFixed(1), source: c.source,
+    stops: (s.stops || []).length, pay: c.pay, tips: c.tips, gross: c.gross, gas: +c.gas.toFixed(2),
+    expenses: c.expenses, net: +c.net.toFixed(2), tax: +c.tax.toFixed(2), takeHome: +c.takeHome.toFixed(2),
+    hourlyGross: +c.hourlyGross.toFixed(2), hourlyTrue: +c.hourlyTrue.toFixed(2), irs: +c.irsDeduction.toFixed(2),
+    stopList: (s.stops || []).slice().sort((a, b) => a.t - b.t).map(p => `${fmtTime(p.t)} ${TYPES[p.type]?.label || p.type}${p.addr ? ' @ ' + p.addr : ''}`).join(' | '),
+    notes: s.notes || ''
+  };
+}
+let syncing = false, syncAgain = false, syncTimer = null;
+// first change starts a short timer; later changes ride along instead of pushing it back
+function scheduleSync(ms = 4000){
+  if (!sync.url || syncTimer) return;
+  syncTimer = setTimeout(() => { syncTimer = null; doSync(); }, ms);
+}
+async function doSync(manual){
+  if (!sync.url) return false;
+  if (syncing){ syncAgain = true; return false; }
+  syncing = true; updateSyncUI();
+  let ok = false;
+  try{
+    trackChanges(true);
+    const sent = shifts.filter(s => pending.has(s.id));
+    const sentHash = {}; sent.forEach(s => sentHash[s.id] = hashes[s.id]);
+    const outShifts = sent.map(s => ({ data: s, row: sheetRow(s) }));
+    const sentTomb = tomb.slice();
+    const sendSettings = (settings.updated || 0) > sync.settingsPushed ? settings : null;
+    const r = await fetch(sync.url, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+      body: JSON.stringify({ key: sync.key, since: sync.since, shifts: outShifts, deleted: sentTomb, settings: sendSettings }) });
+    let j;
+    try{ j = await r.json(); }catch(e){ throw new Error('The sheet didn\'t answer correctly — check the web address (it should end in /exec)'); }
+    if (!j.ok) throw new Error(j.error || 'Sync failed');
+    Object.keys(sentHash).forEach(id => { if (hashes[id] === sentHash[id]) pending.delete(id); }); // unless changed again meanwhile
+    savePending();
+    if (sendSettings) sync.settingsPushed = sendSettings.updated || 0;
+    tomb = tomb.filter(t => !sentTomb.includes(t)); LS.set('mt_tomb', tomb);
+    const changed = applyRemote(j);
+    sync.since = j.serverTime; sync.lastOk = Date.now(); sync.err = '';
+    saveSync();
+    ok = true;
+    if (changed && view !== 'settings' && !$('#modal-root').innerHTML) render();
+    if (manual) toast(changed ? '✅ Synced — got updates from your other device' : '✅ Synced');
+  }catch(e){
+    sync.err = navigator.onLine === false ? 'Offline — will sync when you have signal' : (e.message || 'Could not reach the sheet');
+    saveSync();
+    if (manual) toast('⚠️ ' + sync.err, 4000);
+  }finally{
+    syncing = false; updateSyncUI();
+    if (syncAgain){ syncAgain = false; scheduleSync(1500); }
+  }
+  return ok;
+}
+function applyRemote(j){
+  let changed = false;
+  (j.deleted || []).forEach(id => {
+    if (shifts.some(s => s.id === id)){ shifts = shifts.filter(s => s.id !== id); changed = true; }
+    delete hashes[id];
+  });
+  (j.shifts || []).forEach(rs => {
+    if (!rs || !rs.id || tomb.some(t => t.id === rs.id)) return;
+    const local = shifts.find(s => s.id === rs.id);
+    const ru = rs.updated || 0, lu = local ? (local.updated || 0) : 0;
+    if (!local){ shifts.push(rs); }
+    else if (ru > lu || (ru === lu && !pending.has(rs.id) && shiftHash(rs) !== hashes[rs.id])){
+      Object.keys(local).forEach(k => delete local[k]); Object.assign(local, rs); // update in place so open screens keep working
+    } else return;
+    hashes[rs.id] = shiftHash(rs);
+    pending.delete(rs.id);
+    changed = true;
+  });
+  if (j.settings && (j.settings.updated || 0) > (settings.updated || 0)){
+    settings = Object.assign({}, DEFAULTS, j.settings);
+    LS.set('mt_settings', settings);
+    sync.settingsPushed = settings.updated || 0;
+    changed = true;
+  }
+  if (changed){ LS.set('mt_shifts', shifts); LS.set('mt_hashes', hashes); savePending(); }
+  return changed;
+}
+function syncStatusText(){
+  if (!sync.url) return 'Not connected';
+  if (syncing) return 'Syncing…';
+  if (sync.err) return '⚠️ ' + sync.err;
+  return sync.lastOk ? 'Last synced ' + (sameDay(sync.lastOk, Date.now()) ? fmtTime(sync.lastOk) : fmtDate(sync.lastOk) + ' ' + fmtTime(sync.lastOk)) : 'Not synced yet';
+}
+function updateSyncUI(){
+  const el = $('#sync-status'); if (el) el.textContent = syncStatusText();
+  const h = $('#hdr-sync');
+  if (h) h.textContent = !sync.url ? '' : syncing ? '☁️…' : sync.err ? '☁️⚠️' : '';
+}
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
 
 /* ============ Helpers ============ */
@@ -158,7 +283,14 @@ async function keepAwake(on){
     if (!on && wakeLock){ await wakeLock.release(); wakeLock = null; }
   }catch(e){}
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible'){ if (active) keepAwake(true); if (view === 'drive') render(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible'){
+    if (active) keepAwake(true);
+    if (view === 'drive') render();
+    if (sync.url && Date.now() - sync.lastOk > 60e3) doSync();
+  }
+});
+window.addEventListener('online', () => { if (sync.url) doSync(); });
 
 /* ============ Stop types ============ */
 const TYPES = {
@@ -245,38 +377,83 @@ async function fetchRoute(s){
 /* ============ Street addresses (free OpenStreetMap lookup) ============ */
 /* Returns true only if new addresses were found. Never re-enters while running
    (a re-entrant call used to trigger an endless redraw loop that froze the app). */
-let geoBusy = false;
+/* Background queue: looks up one address per second (the free service's limit),
+   one shift at a time. Keeps running while you use other tabs, saves after every
+   address, updates the screen live, and refreshes the shift page when done. */
 const geoTried = new Set(); // per app session, so failed lookups retry next time
 const geoKey = p => p.lat + ',' + p.lon + ',' + p.t;
-const needsGeo = s => points(s).some(p => p.lat != null && !p.addr && !geoTried.has(geoKey(p)));
-async function geocodeShift(s){
-  if (geoBusy) return false;
-  geoBusy = true;
-  let changed = false;
-  try{
-    for (const p of points(s)){
-      if (p.lat == null || p.addr || geoTried.has(geoKey(p))) continue;
-      geoTried.add(geoKey(p));
-      try{
-        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${p.lat}&lon=${p.lon}`);
-        const j = await r.json(); const a = j.address || {};
-        const street = [a.house_number, a.road].filter(Boolean).join(' ');
-        const city = a.city || a.town || a.village || a.suburb || '';
-        p.addr = [j.name && j.name !== a.road ? j.name : '', street, city].filter(Boolean).join(', ') || j.display_name || '';
-        if (p.addr) changed = true;
-      }catch(e){}
-      await new Promise(r => setTimeout(r, 1100)); // service allows 1 lookup per second
-    }
-  } finally { geoBusy = false; }
-  return changed;
+const geoTodo = s => points(s).filter(p => p.lat != null && !p.addr && !p.geoNone && !geoTried.has(geoKey(p)));
+const geoQueue = [];
+let geoRunning = false, geoProg = null;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function queueGeocode(s, front){
+  if (!s || (geoProg && geoProg.id === s.id) || !geoTodo(s).length) return;
+  const i = geoQueue.indexOf(s.id); if (i >= 0) geoQueue.splice(i, 1);
+  front ? geoQueue.unshift(s.id) : geoQueue.push(s.id);
+  updateGeoUI();
+  runGeoQueue();
 }
-function geocodeAndRefresh(s){
-  if (geoBusy || !needsGeo(s)) return;
-  geocodeShift(s).then(changed => {
-    if (!changed) return;
-    saveShifts();
-    if (view === 'detail' && detailId === s.id) render();
-  });
+async function lookupAddr(p){
+  try{
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${p.lat}&lon=${p.lon}`);
+    if (!r.ok) return null;
+    const j = await r.json(); const a = j.address || {};
+    const street = [a.house_number, a.road].filter(Boolean).join(' ');
+    const city = a.city || a.town || a.village || a.suburb || '';
+    const addr = [j.name && j.name !== a.road ? j.name : '', street, city].filter(Boolean).join(', ') || j.display_name || '';
+    if (!addr) p.geoNone = true; // service answered but has no address here; don't keep asking
+    return addr;
+  }catch(e){ return null; }
+}
+async function runGeoQueue(){
+  if (geoRunning) return;
+  geoRunning = true;
+  try{
+    while (geoQueue.length){
+      const id = geoQueue.shift();
+      const s = shifts.find(x => x.id === id);
+      const todo = s ? geoTodo(s) : [];
+      if (!todo.length) continue;
+      geoProg = { id, done: 0, total: todo.length };
+      updateGeoUI();
+      for (const p of todo){
+        geoTried.add(geoKey(p));
+        const addr = await lookupAddr(p);
+        if (addr){ p.addr = addr; fillAddr(p); saveShifts(true); }
+        geoProg.done++;
+        updateGeoUI();
+        await sleep(1100);
+      }
+      geoProg = null;
+      if (view === 'detail' && detailId === id) render(); // final refresh (map pop-ups etc.)
+      else updateGeoUI();
+    }
+  } finally { geoRunning = false; geoProg = null; updateGeoUI(); }
+}
+/* put a newly found address straight into whatever is on screen */
+function fillAddr(p){
+  const k = geoKey(p);
+  document.querySelectorAll('[data-geo]').forEach(el => { if (el.dataset.geo === k) el.textContent = p.addr; });
+}
+function updateGeoUI(){
+  const hdr = $('#hdr-geo');
+  if (hdr) hdr.textContent = geoProg ? `📍 ${geoProg.done}/${geoProg.total}` : '';
+  const box = $('#geo-status');
+  if (!box) return;
+  if (geoProg && geoProg.id === detailId){
+    const left = Math.ceil((geoProg.total - geoProg.done) * 1.15);
+    const pct = Math.round(geoProg.done / geoProg.total * 100);
+    box.style.display = '';
+    box.innerHTML = `<div class="spread small"><span>📍 Finding street addresses… <b>${geoProg.done} of ${geoProg.total}</b></span><span class="muted">${left > 0 ? 'about ' + (left >= 60 ? Math.floor(left/60) + 'm ' + (left%60) + 's' : left + 's') + ' left' : 'finishing…'}</span></div>
+      <div class="pbar"><div style="width:${pct}%"></div></div>
+      <div class="small muted" style="margin-top:6px">Fine to switch tabs — just keep the app open. This page refreshes itself when done.</div>`;
+  } else if (geoQueue.includes(detailId)){
+    box.style.display = '';
+    box.innerHTML = `<div class="small">📍 Waiting to look up addresses (another shift is finishing first)…</div>`;
+  } else {
+    box.style.display = 'none';
+    box.innerHTML = '';
+  }
 }
 
 /* ============ Maps ============ */
@@ -324,6 +501,7 @@ function render(){
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.nav === (view === 'detail' ? 'history' : view)));
   $('#hdr-right').textContent = active ? '● Shift active' : '';
   $('#hdr-right').style.color = active ? 'var(--accent)' : '';
+  updateGeoUI(); updateSyncUI();
   ({drive:renderDrive, history:renderHistory, detail:renderDetail, summary:renderSummary, settings:renderSettings})[view]();
 }
 
@@ -388,7 +566,7 @@ function stopRow(p){
     <div style="flex:1;min-width:0">
       <div><span class="dot" style="background:${T.color}"></span><b>${fmtTime(p.t)}</b>
         <select data-type="${p.id}" style="width:auto;padding:4px 6px;font-size:14px;margin-left:4px">${STOP_TYPES.map(k => `<option value="${k}" ${k === p.type ? 'selected' : ''}>${TYPES[k].label}</option>`).join('')}</select></div>
-      <div class="small muted">${p.lat == null ? '⚠️ no GPS fix' : esc(p.addr || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4)))}${p.note ? ' · ' + esc(p.note) : ''}</div>
+      <div class="small muted">${p.lat == null ? '⚠️ no GPS fix' : `<span data-geo="${esc(geoKey(p))}">${esc(p.addr || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4)))}</span>`}${p.note ? ' · ' + esc(p.note) : ''}</div>
     </div>
     <button class="btn-sm" data-del="${p.id}" aria-label="Delete stop">✕</button></div>`;
 }
@@ -494,6 +672,7 @@ function openShiftForm(s, mode){
     saveShifts();
     close();
     go('detail', s.id);
+    queueGeocode(s, true);
     toast(mode === 'end' ? '✅ Shift saved' : '✅ Saved');
   };
 }
@@ -543,7 +722,7 @@ function openImport(s){
     root.innerHTML = '';
     toast(n ? `Added ${n} stop${n === 1 ? '' : 's'} from Spark log` : 'No new stops in this shift\'s time window', 3500);
     render();
-    if (s !== active) geocodeAndRefresh(s);
+    if (s !== active) queueGeocode(s, true);
   };
 }
 
@@ -583,7 +762,7 @@ function renderDetail(){
     const since = i ? fmtDur(p.t - pts[i-1].t) : '';
     const T = TYPES[p.type] || TYPES.other;
     const name = p.type === 'start' || p.type === 'end' ? `${T.label}${p.label ? ' – ' + esc(p.label) : ''}` : `${++stopN}. ${T.label}`;
-    return `<tr><td><span class="dot" style="background:${T.color}"></span>${name}<div class="small muted">${esc(p.addr || '')}${p.note ? ' ' + esc(p.note) : ''}</div></td>
+    return `<tr><td><span class="dot" style="background:${T.color}"></span>${name}<div class="small muted"><span data-geo="${esc(geoKey(p))}">${esc(p.addr || '')}</span>${p.note ? ' ' + esc(p.note) : ''}</div></td>
       <td class="num">${fmtTime(p.t)}</td><td class="num">${since}</td><td class="num">${roadMi}</td></tr>`;
   }).join('');
   $('#main').innerHTML = `
@@ -592,6 +771,7 @@ function renderDetail(){
       <div><b>${fmtDate(s.start.t)}</b><div class="small muted">${fmtTime(s.start.t)} – ${fmtTime(s.end.t)} · ${fmtDur(s.end.t - s.start.t)}</div></div>
       <div class="stop-count"><span>${(s.stops||[]).length}</span>stop${(s.stops||[]).length === 1 ? '' : 's'}</div>
     </div>
+    <div id="geo-status" class="card" style="display:none"></div>
     <div id="map-detail" class="map tall"></div>
     <div class="grid2">
       <div class="stat hl"><div class="k">Take-home pay</div><div class="v">${money(c.takeHome)}</div></div>
@@ -632,8 +812,9 @@ function renderDetail(){
   $('#d-import').onclick = () => openImport(s);
   $('#d-del').onclick = () => { if (confirm('Delete this shift permanently?')){ shifts = shifts.filter(x => x.id !== s.id); saveShifts(); go('history'); } };
   bindStopRows(s, false);
-  drawMap('map-detail', s, { route: true, onRoute: () => { saveShifts(); if (view === 'detail' && detailId === s.id) render(); } });
-  geocodeAndRefresh(s);
+  drawMap('map-detail', s, { route: true, onRoute: () => { saveShifts(true); if (view === 'detail' && detailId === s.id) render(); } });
+  updateGeoUI();
+  queueGeocode(s, true);
 }
 
 /* ---------- Summary ---------- */
@@ -836,6 +1017,15 @@ function renderSettings(){
   const lb = LS.get('mt_lastBackup', null);
   $('#main').innerHTML = `
     <div class="card">
+      <div class="spread"><b>☁️ Google Sheet sync</b><span class="small muted" id="sync-status">${esc(syncStatusText())}</span></div>
+      <p class="small muted" style="margin:6px 0 0">Keeps your shifts in a Google Sheet so you can open them on your PC too. Paste the web app address and password from your sheet's script.</p>
+      <label>Web app address</label><input id="y-url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(sync.url)}" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <label>Sync password</label><input id="y-key" type="password" value="${esc(sync.key)}" autocapitalize="off" autocorrect="off">
+      <div style="height:12px"></div>
+      <div class="grid2"><button id="y-go" class="btn-go" style="font-size:16px;padding:14px">${sync.url ? 'Sync now' : 'Connect'}</button>
+        <button id="y-off" ${sync.url ? '' : 'disabled'}>Disconnect</button></div>
+    </div>
+    <div class="card">
       <p class="small muted" style="margin-top:0">These are the defaults for new shifts. You can change them on any single shift too.</p>
       <div class="grid2">
         <div><label>Your car's MPG</label><input id="s-mpg" inputmode="decimal" value="${settings.mpg}"></div>
@@ -856,11 +1046,29 @@ function renderSettings(){
     </div>
     <div class="card small muted">
       <b style="color:var(--text)">Your data</b><br>
-      Everything is stored only on this phone. ${shifts.length} shifts saved. Last backup: ${lb ? fmtDate(lb) : 'never'}.
+      ${sync.url ? 'Saved on this device and synced to your Google Sheet.' : 'Everything is stored only on this device.'} ${shifts.length} shifts saved. Last backup: ${lb ? fmtDate(lb) : 'never'}.
       Back up weekly from the Summary tab and save the file to iCloud Drive.
       <div style="height:10px"></div>
       <button id="s-wipe" style="background:none;color:var(--red)">Erase all data</button>
     </div>`;
+  $('#y-go').onclick = async () => {
+    const url = $('#y-url').value.trim(), key = $('#y-key').value.trim();
+    if (!/^https:\/\/script\.google(usercontent)?\.com\/.+/.test(url)){ toast('That doesn\'t look like the web app address — it starts with https://script.google.com/', 4000); return; }
+    if (!key){ toast('Enter the sync password you put in the script'); return; }
+    if (url !== sync.url){ // new sheet: send everything on this device
+      sync = Object.assign(sync, { url, since:0, lastPush:0, settingsPushed:0, lastOk:0, err:'' });
+      shifts.forEach(x => pending.add(x.id)); savePending();
+    }
+    sync.key = key; saveSync();
+    $('#y-go').disabled = true; $('#y-go').textContent = 'Syncing…';
+    const ok = await doSync(true);
+    render();
+    if (ok) toast(`✅ Connected — ${shifts.length} shift${shifts.length === 1 ? '' : 's'} in sync`, 3500);
+  };
+  $('#y-off').onclick = () => {
+    if (!confirm('Stop syncing this device? Your shifts stay on this device and in the sheet.')) return;
+    sync = { url:'', key:'', since:0, lastPush:0, settingsPushed:0, lastOk:0, err:'' }; saveSync(); render();
+  };
   $('#s-save').onclick = () => {
     settings.mpg = num($('#s-mpg').value) || DEFAULTS.mpg;
     settings.gasPrice = num($('#s-gp').value) ?? DEFAULTS.gasPrice;
@@ -871,8 +1079,10 @@ function renderSettings(){
     saveSettings(); toast('✅ Settings saved');
   };
   $('#s-wipe').onclick = () => {
-    if (confirm('Erase ALL shifts and settings? This cannot be undone.') && confirm('Are you sure? Make a backup first if unsure.')){
-      shifts = []; active = null; localStorage.clear(); settings = Object.assign({}, DEFAULTS); render(); toast('All data erased');
+    if (confirm('Erase ALL shifts and settings from this device? (Your Google Sheet is not touched.)') && confirm('Are you sure? Make a backup first if unsure.')){
+      shifts = []; active = null; localStorage.clear(); settings = Object.assign({}, DEFAULTS);
+      hashes = {}; tomb = []; pending = new Set(); sync = { url:'', key:'', since:0, lastPush:0, settingsPushed:0, lastOk:0, err:'' };
+      render(); toast('All data erased from this device');
     }
   };
 }
@@ -880,6 +1090,8 @@ function renderSettings(){
 /* ============ Boot ============ */
 if (active) view = 'drive';
 render();
+shifts.slice().sort((a,b) => b.start.t - a.start.t).forEach(s => queueGeocode(s));
+if (sync.url) doSync();
 </script>
 </body>
 </html>
