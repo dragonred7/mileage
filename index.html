@@ -53,6 +53,25 @@ textarea{min-height:90px}
 .stat .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
 .stat .k{font-size:12px;color:var(--muted)}
 .stat.hl{background:#14532d} .stat.hl .k{color:#bbf7d0}
+.stat.warn{background:#4c1d1d} .stat.warn .k{color:#fecaca} .stat.warn .v{color:#fca5a5}
+.detail-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:2px 0 4px}
+.stop-count{background:var(--card2);border-radius:10px;padding:6px 12px;text-align:center;font-size:12px;color:var(--muted);line-height:1.1}
+.stop-count span{display:block;font-size:22px;font-weight:700;color:var(--text)}
+/* bar chart */
+.chart-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
+.bars{display:grid;gap:4px;align-items:end}
+.bcol{display:flex;flex-direction:column;align-items:stretch;min-width:0;position:relative}
+.bcol.div::before{content:'';position:absolute;left:-3px;top:0;bottom:0;width:2px;background:var(--orange);border-radius:1px}
+.bwrap{height:170px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center}
+.bval{font-size:12px;font-weight:700;margin-bottom:3px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.bmi-out{font-size:10px;color:var(--muted);margin-bottom:1px;white-space:nowrap}
+.bar{width:100%;max-width:56px;background:var(--accent);border-radius:6px 6px 2px 2px;display:flex;align-items:center;justify-content:center;color:#04210f;font-size:11px;font-weight:600;text-align:center;line-height:1.15;overflow:hidden}
+.bar.zero{background:var(--line);height:3px !important;border-radius:2px}
+.blab{text-align:center;font-size:12px;color:var(--muted);margin-top:6px;line-height:1.25;white-space:nowrap}
+.blab b{display:block;color:var(--text);font-weight:500}
+.bcol.future .blab, .bcol.future .blab b{opacity:.45}
+.bcol.today .blab, .bcol.today .blab b{color:var(--accent);font-weight:700}
+.bars.compact .bval{font-size:10px} .bars.compact .bar{font-size:9px} .bars.compact .blab{font-size:10px}
 table{width:100%;border-collapse:collapse;font-size:14px}
 td,th{padding:8px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 th{color:var(--muted);font-weight:500;font-size:12px}
@@ -224,27 +243,45 @@ async function fetchRoute(s){
 }
 
 /* ============ Street addresses (free OpenStreetMap lookup) ============ */
+/* Returns true only if new addresses were found. Never re-enters while running
+   (a re-entrant call used to trigger an endless redraw loop that froze the app). */
 let geoBusy = false;
+const geoTried = new Set(); // per app session, so failed lookups retry next time
+const geoKey = p => p.lat + ',' + p.lon + ',' + p.t;
+const needsGeo = s => points(s).some(p => p.lat != null && !p.addr && !geoTried.has(geoKey(p)));
 async function geocodeShift(s){
-  if (geoBusy) return; geoBusy = true;
+  if (geoBusy) return false;
+  geoBusy = true;
+  let changed = false;
   try{
     for (const p of points(s)){
-      if (p.lat == null || p.addr || p.geoTried) continue;
-      p.geoTried = true;
+      if (p.lat == null || p.addr || geoTried.has(geoKey(p))) continue;
+      geoTried.add(geoKey(p));
       try{
         const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${p.lat}&lon=${p.lon}`);
         const j = await r.json(); const a = j.address || {};
         const street = [a.house_number, a.road].filter(Boolean).join(' ');
         const city = a.city || a.town || a.village || a.suburb || '';
         p.addr = [j.name && j.name !== a.road ? j.name : '', street, city].filter(Boolean).join(', ') || j.display_name || '';
+        if (p.addr) changed = true;
       }catch(e){}
       await new Promise(r => setTimeout(r, 1100)); // service allows 1 lookup per second
     }
   } finally { geoBusy = false; }
+  return changed;
+}
+function geocodeAndRefresh(s){
+  if (geoBusy || !needsGeo(s)) return;
+  geocodeShift(s).then(changed => {
+    if (!changed) return;
+    saveShifts();
+    if (view === 'detail' && detailId === s.id) render();
+  });
 }
 
 /* ============ Maps ============ */
 let maps = {};
+const routeInflight = new Set();
 function pinIcon(type, n){
   const T = TYPES[type] || TYPES.other;
   return L.divIcon({className:'', html:`<div class="pin" style="background:${T.color}">${n ?? T.ch}</div>`, iconSize:[24,24], iconAnchor:[12,12]});
@@ -269,8 +306,11 @@ function drawMap(elId, s, opts = {}){
   if (geomCache[key]) L.polyline(geomCache[key], {color:'#22c55e', weight:5, opacity:.85}).addTo(m);
   else L.polyline(latlngs, {color:'#22c55e', weight:3, dashArray:'6 8', opacity:.8}).addTo(m);
   if (latlngs.length === 1) m.setView(latlngs[0], 14); else m.fitBounds(latlngs, {padding:[30,30]});
-  if (opts.route && !geomCache[key] && pts.length > 1){
-    fetchRoute(s).then(() => { if (opts.onRoute) opts.onRoute(); }).catch(() => {});
+  if (opts.route && !geomCache[key] && pts.length > 1 && !routeInflight.has(key)){
+    routeInflight.add(key);
+    fetchRoute(s)
+      .then(() => { routeInflight.delete(key); if (geomCache[key] && opts.onRoute) opts.onRoute(); })
+      .catch(() => { routeInflight.delete(key); });
   }
 }
 
@@ -502,8 +542,8 @@ function openImport(s){
     if (s === active) saveActive(); else saveShifts();
     root.innerHTML = '';
     toast(n ? `Added ${n} stop${n === 1 ? '' : 's'} from Spark log` : 'No new stops in this shift\'s time window', 3500);
-    if (s !== active) geocodeShift(s).then(() => { saveShifts(); if (view === 'detail') render(); });
     render();
+    if (s !== active) geocodeAndRefresh(s);
   };
 }
 
@@ -548,13 +588,18 @@ function renderDetail(){
   }).join('');
   $('#main').innerHTML = `
     <button class="btn-link" id="d-back">‹ History</button>
-    <div class="small muted">${fmtDate(s.start.t)} · ${fmtTime(s.start.t)} – ${fmtTime(s.end.t)}</div>
+    <div class="detail-head">
+      <div><b>${fmtDate(s.start.t)}</b><div class="small muted">${fmtTime(s.start.t)} – ${fmtTime(s.end.t)} · ${fmtDur(s.end.t - s.start.t)}</div></div>
+      <div class="stop-count"><span>${(s.stops||[]).length}</span>stop${(s.stops||[]).length === 1 ? '' : 's'}</div>
+    </div>
     <div id="map-detail" class="map tall"></div>
     <div class="grid2">
       <div class="stat hl"><div class="k">Take-home pay</div><div class="v">${money(c.takeHome)}</div></div>
       <div class="stat hl"><div class="k">True hourly (after gas & tax)</div><div class="v">${money(c.hourlyTrue)}/hr</div></div>
       <div class="stat"><div class="k">Gross hourly (pay + tips)</div><div class="v">${money(c.hourlyGross)}/hr</div></div>
       <div class="stat"><div class="k">Miles · ${esc(c.source)}</div><div class="v">${mi(c.miles)}</div></div>
+      <div class="stat warn"><div class="k">Est. tax (${c.taxPct}%)</div><div class="v">${money(c.tax)}</div></div>
+      <div class="stat warn"><div class="k">Est. gas (${c.gallons.toFixed(1)} gal)</div><div class="v">${money(c.gas)}</div></div>
     </div>
     <div class="card"><table class="money">
       <tr><td>Hours worked</td><td>${c.hours.toFixed(2)} (${fmtDur(s.end.t - s.start.t)})</td></tr>
@@ -588,7 +633,7 @@ function renderDetail(){
   $('#d-del').onclick = () => { if (confirm('Delete this shift permanently?')){ shifts = shifts.filter(x => x.id !== s.id); saveShifts(); go('history'); } };
   bindStopRows(s, false);
   drawMap('map-detail', s, { route: true, onRoute: () => { saveShifts(); if (view === 'detail' && detailId === s.id) render(); } });
-  if (points(s).some(p => p.lat != null && !p.addr && !p.geoTried)) geocodeShift(s).then(() => { saveShifts(); if (view === 'detail' && detailId === s.id) render(); });
+  geocodeAndRefresh(s);
 }
 
 /* ---------- Summary ---------- */
@@ -613,16 +658,99 @@ function totals(list){
   t.hourlyGross = t.hours ? t.gross / t.hours : 0; t.hourlyTrue = t.hours ? t.takeHome / t.hours : 0; t.perMile = t.miles ? t.gross / t.miles : 0;
   return t;
 }
+/* ---------- Bar chart ---------- */
+const fmtMD = d => new Date(d).toLocaleDateString([], {month:'short', day:'numeric'});
+const sameDay = (a, b) => { a = new Date(a); b = new Date(b); return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
+const dayStart = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const mondayOf = d => addDays(dayStart(d), -((d.getDay() + 6) % 7));
+function chartBuckets(p){
+  const now = new Date();
+  const B = [];
+  let title = '', divider = -1;
+  if (p === 'today' || p === 'week' || p === 'lastweek'){
+    // Mon–Sun, weekend split off with a divider (same layout as Spark)
+    const m = p === 'lastweek' ? addDays(mondayOf(now), -7) : mondayOf(now);
+    const names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    for (let i = 0; i < 7; i++){
+      const a = addDays(m, i);
+      B.push({ a: a.getTime(), b: addDays(m, i + 1).getTime(), top: names[i], sub: String(a.getDate()), future: a > now, today: sameDay(a, now) });
+    }
+    divider = 5;
+    title = `${fmtMD(m)} – ${fmtMD(addDays(m, 6))}`;
+  } else if (p === 'month' || p === 'lastmonth'){
+    // one bar per week (Mon–Sun) of the month
+    const ms = new Date(now.getFullYear(), now.getMonth() - (p === 'lastmonth' ? 1 : 0), 1);
+    const me = new Date(ms.getFullYear(), ms.getMonth() + 1, 1);
+    for (let w = mondayOf(ms); w < me; w = addDays(w, 7)){
+      const a = w < ms ? ms : w, e = addDays(w, 7), b = e > me ? me : e;
+      B.push({ a: a.getTime(), b: b.getTime(), top: `${a.getMonth()+1}/${a.getDate()}`, sub: `–${addDays(b, -1).getDate()}`, future: a > now, today: now >= a && now < b });
+    }
+    title = ms.toLocaleDateString([], {month:'long', year:'numeric'}) + ' · by week';
+  } else {
+    // this year → by month; all time → by month, or by year if it spans several years
+    const years = shifts.map(s => new Date(s.start.t).getFullYear());
+    const y0 = p === 'all' && years.length ? Math.min(...years) : now.getFullYear();
+    if (p === 'all' && y0 < now.getFullYear()){
+      for (let y = y0; y <= now.getFullYear(); y++)
+        B.push({ a: new Date(y,0,1).getTime(), b: new Date(y+1,0,1).getTime(), top: String(y), sub: '', future: false, today: y === now.getFullYear() });
+      title = 'All time · by year';
+    } else {
+      for (let mth = 0; mth < 12; mth++){
+        const a = new Date(y0, mth, 1);
+        B.push({ a: a.getTime(), b: new Date(y0, mth + 1, 1).getTime(), top: a.toLocaleDateString([], {month:'narrow'}), sub: '', future: a > now, today: mth === now.getMonth() && y0 === now.getFullYear() });
+      }
+      title = `${y0} · by month`;
+    }
+  }
+  B.forEach(x => {
+    const list = shifts.filter(s => s.start.t >= x.a && s.start.t < x.b);
+    x.gross = 0; x.miles = 0;
+    list.forEach(s => { const c = calc(s); x.gross += c.gross; x.miles += c.miles; });
+  });
+  return { B, title, divider };
+}
+function chartHTML(p){
+  const { B, title, divider } = chartBuckets(p);
+  const compact = B.length > 7;
+  const max = Math.max(...B.map(x => x.gross), 1);
+  const H = 130; // px for the tallest bar
+  const val = v => !v ? '' : compact ? (v >= 1000 ? '$' + (v/1000).toFixed(1) + 'k' : '$' + Math.round(v)) : '$' + v.toFixed(2);
+  const totG = B.reduce((a, x) => a + x.gross, 0), totM = B.reduce((a, x) => a + x.miles, 0);
+  const cols = B.map((x, i) => {
+    const h = x.gross > 0 ? Math.max(6, Math.round(x.gross / max * H)) : 0;
+    const miTxt = Math.round(x.miles) + (compact ? '' : '<br>miles');
+    const inside = x.gross > 0 && x.miles > 0 && h >= (compact ? 22 : 34);
+    return `<div class="bcol ${i === divider ? 'div' : ''} ${x.future ? 'future' : ''} ${x.today ? 'today' : ''}">
+      <div class="bwrap">
+        ${!inside && x.miles > 0 ? `<div class="bmi-out">${Math.round(x.miles)} mi</div>` : ''}
+        <div class="bval">${val(x.gross)}</div>
+        <div class="bar ${h ? '' : 'zero'}" style="height:${h}px">${inside ? miTxt : ''}</div>
+      </div>
+      <div class="blab"><b>${x.top}</b>${x.sub}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card">
+    <div class="chart-head"><b>Earnings</b><span class="small muted">${esc(title)}</span></div>
+    <div class="bars ${compact ? 'compact' : ''}" style="grid-template-columns:repeat(${B.length},1fr)">${cols}</div>
+    <div class="spread small" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">
+      <span class="muted">Pay + tips · miles inside bars</span><b>${money(totG)} · ${totM.toFixed(0)} mi</b></div>
+  </div>`;
+}
+
 function renderSummary(){
   $('#title').textContent = 'Summary';
   const list = shiftsIn(period), t = totals(list);
   $('#main').innerHTML = `
     <div class="chips">${Object.entries(PERIODS).map(([k, v]) => `<button class="chip ${k === period ? 'on' : ''}" data-p="${k}">${v}</button>`).join('')}</div>
+    ${chartHTML(period)}
     <div class="grid2" style="margin-top:8px">
       <div class="stat hl"><div class="k">Take-home</div><div class="v">${money(t.takeHome)}</div></div>
       <div class="stat hl"><div class="k">True hourly</div><div class="v">${money(t.hourlyTrue)}/hr</div></div>
       <div class="stat"><div class="k">Gross hourly</div><div class="v">${money(t.hourlyGross)}/hr</div></div>
       <div class="stat"><div class="k">Miles</div><div class="v">${t.miles.toFixed(1)}</div></div>
+      <div class="stat warn"><div class="k">Est. tax</div><div class="v">${money(t.tax)}</div></div>
+      <div class="stat warn"><div class="k">Est. gas</div><div class="v">${money(t.gas)}</div></div>
     </div>
     <div class="card"><table class="money">
       <tr><td>Shifts</td><td>${t.n}</td></tr>
