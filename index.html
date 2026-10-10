@@ -41,6 +41,7 @@ button:disabled{opacity:.5}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
 .stopbtn{padding:20px 6px;font-size:16px}
 .stopbtn.pickup{background:#1e3a8a} .stopbtn.dropoff{background:#92400e}
+.stopbtn.shopS{background:#115e59} .stopbtn.shopE{background:#155e75}
 .stopbtn.gas{background:#713f12} .stopbtn.break{background:#374151} .stopbtn.other{background:#3f3f46}
 label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
 input,select,textarea{font:inherit;font-size:16px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
@@ -53,6 +54,12 @@ textarea{min-height:90px}
 .stat .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
 .stat .k{font-size:12px;color:var(--muted)}
 .stat.hl{background:#14532d} .stat.hl .k{color:#bbf7d0}
+.timef{position:relative}
+.timef input[type=time]{padding-right:56px;min-height:46px}
+.timef input[type=time]::-webkit-calendar-picker-indicator{display:none}
+.t-pick{position:absolute;right:5px;top:5px;bottom:5px;width:44px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:8px;background:var(--card2);font-size:18px}
+input[type=date]{min-height:46px}
+.stop-note{color:#fde68a;margin-top:2px}
 .stat.blue{background:#1e3a5f} .stat.blue .k{color:#bfdbfe}
 .money tr.b td{font-weight:700}
 /* Pay / Tips drawn as branches under Gross Pay */
@@ -274,6 +281,25 @@ const fmtDate = t => new Date(t).toLocaleDateString([], {weekday:'short', month:
 const fmtDateShort = t => new Date(t).toLocaleDateString([], {month:'numeric', day:'numeric', year:'numeric'});
 function fmtDur(ms){ ms = Math.max(0, ms); const h = Math.floor(ms/3.6e6), m = Math.floor(ms%3.6e6/6e4); return h ? `${h}h ${m}m` : `${m}m`; }
 function fmtClock(ms){ ms = Math.max(0, ms); const h = Math.floor(ms/3.6e6), m = Math.floor(ms%3.6e6/6e4), s = Math.floor(ms%6e4/1000); return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+/* ---- Shift Day + time helpers (typed times like "2:30p", "1430", "2pm" all work) ---- */
+const pad2 = n => String(n).padStart(2, '0');
+const toDateInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; };
+const minsOf = t => { const d = new Date(t); return d.getHours() * 60 + d.getMinutes(); };
+const fmtMins = m => { const h = Math.floor(m / 60) % 24, mm = m % 60; return `${h % 12 || 12}:${pad2(mm)} ${h < 12 ? 'AM' : 'PM'}`; };
+const minsTo24 = m => `${pad2(Math.floor(m / 60) % 24)}:${pad2(m % 60)}`;
+const timeMins = el => { if (!el || !el.value) return null; const [h, m] = el.value.split(':').map(Number); return h * 60 + m; };
+// Native time box: type or tab through hour → minute → AM/PM. The 🕒 button opens the clock picker.
+function timeField(id, label, t){
+  return `<div><label for="${id}">${label}</label><div class="timef">
+    <input type="time" id="${id}" value="${minsTo24(minsOf(t))}" required>
+    <button type="button" class="t-pick" data-pick="${id}" aria-label="Pick ${label.toLowerCase()}">🕒</button>
+  </div></div>`;
+}
+function bindTimeField(id, onChange){
+  const el = $('#' + id);
+  el.addEventListener('input', onChange); el.addEventListener('change', onChange);
+  $(`[data-pick="${id}"]`).onclick = () => { try{ el.showPicker(); }catch(e){ el.focus(); el.click(); } };
+}
 const toLocalInput = t => { const d = new Date(t); return new Date(d.getTime() - d.getTimezoneOffset()*6e4).toISOString().slice(0,16); };
 function haversine(a, b){ const R = 3958.8, r = x => x*Math.PI/180; const dLat = r(b.lat-a.lat), dLon = r(b.lon-a.lon); const h = Math.sin(dLat/2)**2 + Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
 let toastTimer;
@@ -312,12 +338,14 @@ const TYPES = {
   end:{label:'End', color:'#ef4444', ch:'E'},
   pickup:{label:'Pickup', color:'#3b82f6', ch:'P'},
   dropoff:{label:'Drop-off', color:'#f59e0b', ch:'D'},
+  shopStart:{label:'Shopping (Start)', color:'#14b8a6', ch:'S'},
+  shopEnd:{label:'Shopping (End)', color:'#06b6d4', ch:'E'},
   spark:{label:'Spark opened', color:'#a855f7', ch:'•'},
   gas:{label:'Gas', color:'#eab308', ch:'G'},
   break:{label:'Break', color:'#6b7280', ch:'B'},
   other:{label:'Other', color:'#71717a', ch:'O'}
 };
-const STOP_TYPES = ['pickup','dropoff','spark','gas','break','other'];
+const STOP_TYPES = ['pickup','dropoff','shopStart','shopEnd','gas','break','other'];
 
 /* ============ Core calculations ============ */
 function points(s){
@@ -552,6 +580,10 @@ function renderDrive(){
       <button class="stopbtn pickup" data-stop="pickup">🛒 Pickup</button>
       <button class="stopbtn dropoff" data-stop="dropoff">📦 Drop-off</button>
     </div>
+    <div class="grid2" style="margin-top:10px">
+      <button class="stopbtn shopS" data-stop="shopStart">🛍️ Shopping (Start)</button>
+      <button class="stopbtn shopE" data-stop="shopEnd">✅ Shopping (End)</button>
+    </div>
     <div class="grid3" style="margin-top:10px">
       <button class="stopbtn gas" data-stop="gas">⛽ Gas</button>
       <button class="stopbtn break" data-stop="break">☕ Break</button>
@@ -573,21 +605,40 @@ function renderDrive(){
   drawMap('map-live', active);
   keepAwake(true);
 }
+const pointId = p => p.type === 'start' ? '__start' : p.type === 'end' ? '__end' : p.id;
+function findPoint(s, id){ return id === '__start' ? s.start : id === '__end' ? s.end : (s.stops || []).find(x => x.id === id); }
 function stopRow(p){
   const T = TYPES[p.type] || TYPES.other;
+  const fixed = p.type === 'start' || p.type === 'end';
+  const id = pointId(p);
+  const types = STOP_TYPES.includes(p.type) ? STOP_TYPES : [p.type, ...STOP_TYPES]; // keep older types (e.g. Spark) selectable on old stops
+  const head = fixed
+    ? `<b style="margin-left:2px">${T.label}${p.label ? ' – ' + esc(p.label) : ''}</b>`
+    : `<select data-type="${id}" style="width:auto;padding:4px 6px;font-size:14px;margin-left:4px">${types.map(k => `<option value="${k}" ${k === p.type ? 'selected' : ''}>${(TYPES[k] || TYPES.other).label}</option>`).join('')}</select>`;
   return `<div class="item">
     <div style="flex:1;min-width:0">
-      <div><span class="dot" style="background:${T.color}"></span><b>${fmtTime(p.t)}</b>
-        <select data-type="${p.id}" style="width:auto;padding:4px 6px;font-size:14px;margin-left:4px">${STOP_TYPES.map(k => `<option value="${k}" ${k === p.type ? 'selected' : ''}>${TYPES[k].label}</option>`).join('')}</select></div>
-      <div class="small muted">${p.lat == null ? '⚠️ no GPS fix' : `<span data-geo="${esc(geoKey(p))}">${esc(p.addr || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4)))}</span>`}${p.note ? ' · ' + esc(p.note) : ''}</div>
+      <div><span class="dot" style="background:${T.color}"></span><b>${fmtTime(p.t)}</b> ${head}</div>
+      <div class="small muted">${p.lat == null ? '⚠️ no GPS fix' : `<span data-geo="${esc(geoKey(p))}">${esc(p.addr || (p.lat.toFixed(4) + ', ' + p.lon.toFixed(4)))}</span>`}</div>
+      ${p.note ? `<div class="small stop-note">📝 ${esc(p.note)}</div>` : ''}
     </div>
-    <button class="btn-sm" data-del="${p.id}" aria-label="Delete stop">✕</button></div>`;
+    <button class="btn-sm" data-note="${id}" aria-label="${p.note ? 'Edit' : 'Add'} note">📝</button>
+    ${fixed ? '<span style="width:38px"></span>' : `<button class="btn-sm" data-del="${id}" aria-label="Delete stop">✕</button>`}</div>`;
+}
+function editNote(s, id, persist){
+  const p = findPoint(s, id); if (!p) return;
+  const v = prompt(p.note ? 'Edit note (clear it to remove):' : 'Add a note for this stop:', p.note || '');
+  if (v === null) return;
+  p.note = v.trim(); persist(); render();
 }
 function bindStopRows(s, isActive){
   const persist = () => { if (isActive) saveActive(); else saveShifts(); };
   document.querySelectorAll('[data-type]').forEach(sel => sel.onchange = () => {
-    const p = s.stops.find(x => x.id === sel.dataset.type); if (p){ p.type = sel.value; persist(); render(); }
+    const p = findPoint(s, sel.dataset.type); if (!p) return;
+    p.type = sel.value;
+    if (p.type === 'other' && !p.note){ const v = prompt('What is this stop? (optional)'); if (v) p.note = v.trim(); }
+    persist(); render();
   });
+  document.querySelectorAll('[data-note]').forEach(b => b.onclick = () => editNote(s, b.dataset.note, persist));
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     if (!confirm('Delete this stop?')) return;
     s.stops = s.stops.filter(x => x.id !== b.dataset.del); persist(); render();
@@ -623,7 +674,7 @@ async function addStop(type, btn){
 function openShiftForm(s, mode){
   const isNew = mode === 'manual';
   if (isNew){
-    const now = Date.now();
+    const now = Math.floor(Date.now() / 3.6e6) * 3.6e6; // whole hour, easier to adjust
     s = { id: uid(), start: { t: now - 4*3.6e6, label: settings.homeLabel }, end: { t: now, label: settings.homeLabel }, stops: [], expenses: [],
       mpg: settings.mpg, gasPrice: settings.gasPrice, taxPct: settings.taxPct, irsRate: settings.irsRate, manual: true };
   }
@@ -635,9 +686,14 @@ function openShiftForm(s, mode){
   const root = $('#modal-root');
   root.innerHTML = `<div class="modal"><div class="sheet">
     <div class="spread"><h2>${title}</h2><button class="btn-link" id="f-close">Cancel</button></div>
+    <label for="f-day">Shift Day</label>
+    <input type="date" id="f-day" value="${toDateInput(s.start.t)}">
     <div class="grid2">
-      <div><label>Start</label><input type="datetime-local" id="f-st" value="${toLocalInput(s.start.t)}"></div>
-      <div><label>End</label><input type="datetime-local" id="f-et" value="${toLocalInput(endT)}"></div>
+      ${timeField('f-st', 'Start Time', s.start.t)}
+      ${timeField('f-et', 'End Time', endT)}
+    </div>
+    <div class="small muted" id="f-len" style="margin-top:6px"></div>
+    <div class="grid2">
       <div><label>Start odometer</label><input id="f-o1" inputmode="decimal" value="${s.start.odo ?? ''}"></div>
       <div><label>End odometer</label><input id="f-o2" inputmode="decimal" value="${(s.end && s.end.odo) ?? ''}" ${mode === 'end' ? 'autofocus' : ''}></div>
       <div><label>Started from</label><input id="f-sl" value="${esc(s.start.label || '')}"></div>
@@ -665,12 +721,40 @@ function openShiftForm(s, mode){
   $('#f-close').onclick = close;
   $('#f-addexp').onclick = () => { $('#f-exps').insertAdjacentHTML('beforeend', expRow({})); bindExp(); };
   bindExp();
+  // work out real start/end timestamps from Shift Day + the two times
+  const readTimes = () => {
+    const day = $('#f-day').value; if (!day) return null;
+    const [y, mo, d] = day.split('-').map(Number);
+    const sm = timeMins($('#f-st')), em = timeMins($('#f-et'));
+    if (sm == null || em == null) return null;
+    const base = new Date(y, mo - 1, d).getTime();
+    let st = new Date(y, mo - 1, d, 0, sm).getTime();
+    let et = new Date(y, mo - 1, d + (em <= sm ? 1 : 0), 0, em).getTime(); // earlier end time = after midnight
+    // unchanged times keep their exact original value (seconds included)
+    if (toDateInput(s.start.t) === day && minsOf(s.start.t) === sm) st = s.start.t;
+    if (s.end && s.end.t && minsOf(s.end.t) === em && Math.abs(s.end.t - et) < 6e4) et = s.end.t;
+    return { st, et, overnight: em <= sm, same: em === sm, base };
+  };
+  const showLen = () => {
+    const r = readTimes(); const el = $('#f-len'); if (!el) return;
+    if (!r){ el.textContent = $('#f-day').value ? '⚠️ Fill in both times' : ''; return; }
+    el.textContent = r.same ? '⚠️ Start and end times are the same' : `Shift length: ${fmtDur(r.et - r.st)}${r.overnight ? ' (ends after midnight, next day)' : ''}`;
+  };
+  bindTimeField('f-st', showLen); bindTimeField('f-et', showLen);
+  $('#f-day').addEventListener('change', showLen);
+  showLen();
   $('#f-save').onclick = async () => {
-    const st = new Date($('#f-st').value).getTime(), et = new Date($('#f-et').value).getTime();
-    if (isNaN(st) || isNaN(et) || et <= st){ toast('End time must be after start time'); return; }
+    const r = readTimes();
+    if (!r){ toast($('#f-day').value ? 'Fill in the start and end times' : 'Pick the shift day'); return; }
+    if (r.same){ toast('End time must be different from start time'); return; }
+    const st = r.st, et = r.et;
+    // moved to a different day? move the stops along with it
+    const oldBase = new Date(new Date(s.start.t).getFullYear(), new Date(s.start.t).getMonth(), new Date(s.start.t).getDate()).getTime();
+    const dayShift = r.base - oldBase;
     const o1 = num($('#f-o1').value), o2 = num($('#f-o2').value);
     if (o1 != null && o2 != null && o2 < o1){ toast('End odometer is lower than start'); return; }
     $('#f-save').disabled = true; $('#f-save').textContent = 'Saving…';
+    if (dayShift && !isNew) (s.stops || []).forEach(p => p.t += dayShift);
     s.start.t = st; s.start.odo = o1; s.start.label = $('#f-sl').value.trim();
     s.end = s.end || {};
     s.end.t = et; s.end.odo = o2; s.end.label = $('#f-el').value.trim();
@@ -810,7 +894,7 @@ function renderDetail(){
     const since = i ? fmtDur(p.t - pts[i-1].t) : '';
     const T = TYPES[p.type] || TYPES.other;
     const name = p.type === 'start' || p.type === 'end' ? `${T.label}${p.label ? ' – ' + esc(p.label) : ''}` : `${++stopN}. ${T.label}`;
-    return `<tr><td><span class="dot" style="background:${T.color}"></span>${name}<div class="small muted"><span data-geo="${esc(geoKey(p))}">${esc(p.addr || '')}</span>${p.note ? ' ' + esc(p.note) : ''}</div></td>
+    return `<tr><td><span class="dot" style="background:${T.color}"></span>${name}<div class="small muted"><span data-geo="${esc(geoKey(p))}">${esc(p.addr || '')}</span></div>${p.note ? `<div class="small stop-note">📝 ${esc(p.note)}</div>` : ''}</td>
       <td class="num">${fmtTime(p.t)}</td><td class="num">${since}</td><td class="num">${roadMi}</td></tr>`;
   }).join('');
   $('#main').innerHTML = `
@@ -830,7 +914,8 @@ function renderDetail(){
       <table style="margin-top:6px"><tr><th>Stop</th><th class="num">Time</th><th class="num">Since last</th><th class="num">Miles</th></tr>${rows}</table>
       <p class="small muted">${routeOk ? 'Miles between stops follow the road route.' : '~ = straight-line estimate (route not loaded yet).'}</p>
     </div>
-    ${(s.stops||[]).length ? `<div class="card"><b class="sec">Edit Stops</b><div class="list">${s.stops.slice().sort((a,b)=>a.t-b.t).map(stopRow).join('')}</div></div>` : ''}
+    <div class="card"><b class="sec">Edit Stops</b><div class="list">${pts.map(stopRow).join('')}</div>
+      <p class="small muted" style="margin-bottom:0">Tap 📝 to add or change a note on any stop.</p></div>
     <div class="grid2">
       <button id="d-edit">✏️ Edit Shift</button>
       <button id="d-del" class="btn-danger">🗑️ Delete Shift</button>
